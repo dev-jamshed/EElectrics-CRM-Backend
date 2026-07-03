@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Client {
+  id        String     @id @default(cuid())
+  firstName String
+  lastName  String?
+  email     String?
+  phone     String?
+  company   String?
+  notes     String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  caseFiles CaseFile[]
+  documents Document[]
+
+  @@index([firstName])
+  @@index([email])
+}
+
+model CaseFile {
+  id        String     @id @default(cuid())
+  serialNo  Int        @unique
+  title     String?
+  clientId  String?
+  client    Client?    @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  documents Document[]
+}
+
+model Document {
+  id              String         @id @default(cuid())
+  type            String
+  status          String         @default("DRAFT")
+  documentNo      String         @unique
+  caseFileId      String?
+  caseFile        CaseFile?      @relation(fields: [caseFileId], references: [id], onDelete: SetNull)
+  clientId        String?
+  client          Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  parentDocumentId String?
+  parentDocument  Document?      @relation("DocumentRevisions", fields: [parentDocumentId], references: [id], onDelete: SetNull)
+  revisions       Document[]     @relation("DocumentRevisions")
+  rootDocumentId  String?
+  revisionNo      Int            @default(1)
+  issueDate       DateTime?
+  dueDate         DateTime?
+  bookingDate     DateTime?
+  jobTitle        String
+  description     String?
+  greeting        String?
+  emailNote       String?
+  cc              String?
+  phoneNo         String?
+  postalCode      String?
+  addressLine     String?
+  extraAddress    String?
+  selectedAddress String?
+  price           Decimal      @default(0)
+  includeOptions  String?
+  sendMail        Boolean      @default(false)
+  sendImages      Boolean      @default(false)
+  invoiceCheck    Boolean      @default(false)
+  emailSubject    String?
+  emailBody       String?
+  pdfNotes        String?
+  emailStatus     String       @default("NOT_SENT")
+  emailError      String?
+  subtotal        Decimal        @default(0)
+  total           Decimal        @default(0)
+  paymentStatus   String         @default("NOT_PAID")
+  paymentUrl      String?
+  pdfUrl          String?
+  sentAt          DateTime?
+  paidAt          DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  lineItems       LineItem[]
+
+  @@index([type])
+  @@index([caseFileId])
+  @@index([clientId])
+  @@index([rootDocumentId])
+}
+
+model LineItem {
+  id          String       @id @default(cuid())
+  documentId  String
+  document    Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  kind        String
+  title       String
+  description String?
+  quantity    Decimal      @default(1)
+  unitPrice   Decimal      @default(0)
+  total       Decimal      @default(0)
+  sortOrder   Int          @default(0)
+}
+
+model Counter {
+  id       String @id
+  nextSeq  Int    @default(1)
+}
