@@ -39,8 +39,11 @@ model Document {
   id              String         @id @default(cuid())
   type            String
   status          String         @default("DRAFT")
-  documentNo      String         @unique
-  caseFileId      String?
+    documentNo      String         @unique
+    confirmationToken String?      @unique
+    bookingConfirmed Boolean       @default(false)
+    confirmedAt     DateTime?
+    caseFileId      String?
   caseFile        CaseFile?      @relation(fields: [caseFileId], references: [id], onDelete: SetNull)
   clientId        String?
   client          Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)

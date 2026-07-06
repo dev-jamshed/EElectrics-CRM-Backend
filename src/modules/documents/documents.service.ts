@@ -1,13 +1,17 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { randomBytes } from "crypto";
+import Stripe from "stripe";
 import { CountersService } from "./../../common/counters.service";
 import { PrismaService } from "../../common/prisma.service";
 import { CloneDocumentDto, CreateDocumentDto, DocumentStatusValue, DocumentTypeValue, LineItemDto, UpdateDocumentDto } from "./dto";
+import { DocumentMailService } from "./document-mail.service";
 
 @Injectable()
 export class DocumentsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly counters: CountersService
+    private readonly counters: CountersService,
+    private readonly mail: DocumentMailService
   ) {}
 
   list(filters: { type?: DocumentTypeValue; status?: string; q?: string }) {
@@ -76,8 +80,9 @@ export class DocumentsService {
     const document = await this.prisma.document.create({
       data: {
         type: dto.type,
-        status: dto.status ?? "DRAFT",
+        status: dto.sendMail ? "SENT" : dto.status ?? "DRAFT",
         documentNo,
+        confirmationToken: dto.type === "BOOKING" ? createConfirmationToken() : undefined,
         caseFileId: caseFile?.id,
         clientId,
         jobTitle: dto.jobTitle,
@@ -98,7 +103,7 @@ export class DocumentsService {
         emailSubject: dto.emailSubject,
         emailBody: dto.emailBody,
         pdfNotes: dto.pdfNotes,
-        emailStatus: dto.sendMail ? "SENT" : "NOT_SENT",
+        emailStatus: dto.sendMail ? "PENDING" : "NOT_SENT",
         emailError: null,
         issueDate: dto.issueDate ? new Date(dto.issueDate) : undefined,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
@@ -119,6 +124,9 @@ export class DocumentsService {
       });
     }
 
+    if (dto.sendMail && dto.type !== "BOOKING") await this.ensurePaymentUrl(document.id);
+    if (dto.sendMail) await this.sendMailAndUpdateStatus(document.id);
+
     return this.detail(document.id);
   }
 
@@ -133,7 +141,7 @@ export class DocumentsService {
       this.prisma.document.update({
         where: { id },
         data: {
-          status: dto.status ?? "DRAFT",
+          status: dto.sendMail ? "SENT" : dto.status ?? "DRAFT",
           clientId,
           jobTitle: dto.jobTitle,
           description: dto.description,
@@ -153,7 +161,7 @@ export class DocumentsService {
           emailSubject: dto.emailSubject,
           emailBody: dto.emailBody,
           pdfNotes: dto.pdfNotes,
-          emailStatus: dto.sendMail ? "SENT" : "NOT_SENT",
+          emailStatus: dto.sendMail ? "PENDING" : "NOT_SENT",
           emailError: null,
           issueDate: dto.issueDate ? new Date(dto.issueDate) : null,
           dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
@@ -164,6 +172,9 @@ export class DocumentsService {
         }
       })
     ]);
+
+    if (dto.sendMail && dto.type !== "BOOKING") await this.ensurePaymentUrl(id);
+    if (dto.sendMail) await this.sendMailAndUpdateStatus(id);
 
     return this.detail(id);
   }
@@ -183,11 +194,97 @@ export class DocumentsService {
     return { id, deleted: true };
   }
 
+  async publicBooking(token: string) {
+    const document = await this.prisma.document.findFirst({
+      where: {
+        type: "BOOKING",
+        OR: [{ confirmationToken: token }, { id: token }]
+      },
+      include: { client: true, caseFile: true }
+    });
+    if (!document) throw new NotFoundException("Booking not found");
+
+    return {
+      id: document.id,
+      documentNo: document.documentNo,
+      status: document.status,
+      bookingDate: document.bookingDate,
+      bookingConfirmed: document.bookingConfirmed,
+      confirmedAt: document.confirmedAt,
+      jobTitle: document.jobTitle,
+      greeting: document.greeting,
+      emailNote: document.emailNote,
+      addressLine: document.addressLine,
+      extraAddress: document.extraAddress,
+      client: {
+        firstName: document.client?.firstName,
+        lastName: document.client?.lastName
+      }
+    };
+  }
+
+  async confirmBooking(token: string) {
+    const document = await this.prisma.document.findFirst({
+      where: {
+        type: "BOOKING",
+        OR: [{ confirmationToken: token }, { id: token }]
+      },
+      include: { client: true, caseFile: true }
+    });
+    if (!document) throw new NotFoundException("Booking not found");
+
+    if (!document.bookingConfirmed) {
+      await this.prisma.document.update({
+        where: { id: document.id },
+        data: { bookingConfirmed: true, confirmedAt: new Date() }
+      });
+    }
+
+    return this.publicBooking(document.confirmationToken ?? document.id);
+  }
+
+  private async sendMailAndUpdateStatus(id: string) {
+    let document = await this.prisma.document.findUnique({
+      where: { id },
+      include: { client: true, caseFile: true, lineItems: { orderBy: { sortOrder: "asc" } } }
+    });
+    if (!document) throw new NotFoundException("Document not found");
+
+    try {
+      if (document.type !== "BOOKING") {
+        await this.ensurePaymentUrl(id);
+        document = await this.prisma.document.findUnique({
+          where: { id },
+          include: { client: true, caseFile: true, lineItems: { orderBy: { sortOrder: "asc" } } }
+        });
+        if (!document) throw new NotFoundException("Document not found");
+      }
+      const documentForMail =
+        document.type === "BOOKING" && !document.confirmationToken
+          ? await this.prisma.document.update({
+              where: { id },
+              data: { confirmationToken: createConfirmationToken() },
+              include: { client: true, caseFile: true, lineItems: { orderBy: { sortOrder: "asc" } } }
+            })
+          : document;
+      await this.mail.sendDocumentMail(documentForMail);
+      await this.prisma.document.update({
+        where: { id },
+        data: { status: "SENT", emailStatus: "SENT", emailError: null, sentAt: new Date() }
+      });
+    } catch (error) {
+      await this.prisma.document.update({
+        where: { id },
+        data: {
+          emailStatus: "FAILED",
+          emailError: error instanceof Error ? error.message : "Email send failed"
+        }
+      });
+    }
+  }
+
   async cloneAsRevision(id: string, _dto: CloneDocumentDto) {
     const source = await this.detail(id);
-    if (source.type === "BOOKING") {
-      throw new BadRequestException("Booking revisions are not allowed");
-    }
     const rootDocumentId = source.rootDocumentId ?? source.id;
     const latestRevision = await this.prisma.document.findFirst({
       where: { rootDocumentId },
@@ -229,6 +326,8 @@ export class DocumentsService {
         issueDate: source.issueDate,
         dueDate: source.dueDate,
         bookingDate: source.bookingDate,
+        bookingConfirmed: source.bookingConfirmed,
+        confirmedAt: source.confirmedAt,
         subtotal: source.subtotal,
         total: source.total,
         lineItems: {
@@ -248,6 +347,36 @@ export class DocumentsService {
     return this.detail(clone.id);
   }
 
+  async ensurePaymentUrl(id: string) {
+    const document = await this.prisma.document.findUnique({
+      where: { id },
+      include: { client: true }
+    });
+    if (!document) throw new NotFoundException("Document not found");
+    if (document.type === "BOOKING") throw new BadRequestException("Booking does not have online payment");
+    if (document.paymentUrl) return document.paymentUrl;
+
+    const paymentUrl = await this.createStripeCheckoutUrl(document);
+    await this.prisma.document.update({
+      where: { id },
+      data: { paymentUrl }
+    });
+    return paymentUrl;
+  }
+
+  async markPaidFromPayment(id: string) {
+    await this.ensureExists(id);
+    await this.prisma.document.update({
+      where: { id },
+      data: {
+        paymentStatus: "PAID",
+        status: "PAID",
+        paidAt: new Date()
+      }
+    });
+    return this.detail(id);
+  }
+
   async markPaid(id: string) {
     await this.ensureExists(id);
     return this.prisma.document.update({
@@ -262,13 +391,12 @@ export class DocumentsService {
 
   async markSent(id: string) {
     await this.ensureExists(id);
-    return this.prisma.document.update({
+    await this.prisma.document.update({
       where: { id },
-      data: {
-        status: "SENT",
-        sentAt: new Date()
-      }
+      data: { emailStatus: "PENDING", emailError: null }
     });
+    await this.sendMailAndUpdateStatus(id);
+    return this.detail(id);
   }
 
   private async resolveClientId(dto: CreateDocumentDto) {
@@ -370,5 +498,61 @@ export class DocumentsService {
     const exists = await this.prisma.document.findUnique({ where: { id } });
     if (!exists) throw new NotFoundException("Document not found");
     return exists;
+  }
+
+  private async createStripeCheckoutUrl(document: { id: string; documentNo: string; type: string; price: unknown; total: unknown; addressLine?: string | null }) {
+    const secret = (process.env.STRIPE_SECRET ?? "").replace(/\s+/g, "").trim();
+    if (!secret) throw new BadRequestException("Stripe secret key is missing");
+
+    const amount = Math.round(Number(document.price ?? document.total ?? 0) * 100);
+    if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException("Payment amount is invalid");
+
+    const stripe = new Stripe(secret);
+    const product = await stripe.products.create({
+      name: "Booking  "
+    });
+    const price = await stripe.prices.create({
+      unit_amount: amount,
+      currency: "GBP",
+      product: product.id
+    });
+    const response = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      line_items: [{ price: price.id, quantity: 1 }],
+      mode: "payment",
+      success_url: `${publicApiBaseUrl()}/public/payments/${document.id}/success`,
+      cancel_url: `${publicApiBaseUrl()}/public/payments/${document.id}/cancel`,
+      metadata: {
+        documentId: document.id,
+        documentNo: document.documentNo,
+        type: document.type
+      }
+    });
+
+    if (!response.url) throw new BadRequestException("Stripe checkout URL was not created");
+    return response.url;
+  }
+}
+
+function createConfirmationToken() {
+  return randomBytes(45).toString("base64url");
+}
+
+function publicApiBaseUrl() {
+  const configured = process.env.PUBLIC_API_URL || process.env.API_PUBLIC_URL;
+  if (configured) return configured.split(",")[0].trim().replace(/\/$/, "");
+
+  const appBase = (process.env.PUBLIC_APP_URL || process.env.WEB_ORIGIN || "http://localhost:5174").split(",")[0].trim();
+  try {
+    const url = new URL(appBase);
+    if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+      url.port = process.env.PORT || "3000";
+    }
+    url.pathname = "/api";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return "http://localhost:3000/api";
   }
 }

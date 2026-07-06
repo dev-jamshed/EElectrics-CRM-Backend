@@ -49,4 +49,5 @@ export class DocumentsController {
   markSent(@Param("id") id: string) {
     return this.documents.markSent(id);
   }
+
 }
