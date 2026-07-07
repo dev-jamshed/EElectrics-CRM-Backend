@@ -5,6 +5,7 @@ import { ClientsModule } from "./modules/clients/clients.module";
 import { DashboardModule } from "./modules/dashboard/dashboard.module";
 import { DocumentsModule } from "./modules/documents/documents.module";
 import { PdfModule } from "./modules/pdf/pdf.module";
+import { MailboxModule } from "./modules/mailbox/mailbox.module";
 import { CommonModule } from "./common/common.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { APP_GUARD } from "@nestjs/core";
@@ -19,7 +20,8 @@ import { AuthGuard } from "./modules/auth/auth.guard";
     DocumentsModule,
     AddressesModule,
     DashboardModule,
-    PdfModule
+    PdfModule,
+    MailboxModule
   ],
   providers: [
     {

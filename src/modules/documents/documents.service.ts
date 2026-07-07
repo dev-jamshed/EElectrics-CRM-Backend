@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { randomBytes } from "crypto";
-import Stripe from "stripe";
+import Stripe = require("stripe");
 import { CountersService } from "./../../common/counters.service";
 import { PrismaService } from "../../common/prisma.service";
 import { CloneDocumentDto, CreateDocumentDto, DocumentStatusValue, DocumentTypeValue, LineItemDto, UpdateDocumentDto } from "./dto";
@@ -34,6 +34,7 @@ export class DocumentsService {
         client: true,
         caseFile: true,
         lineItems: true,
+        attachments: true,
         revisions: {
           orderBy: { revisionNo: "desc" }
         }
@@ -55,9 +56,10 @@ export class DocumentsService {
           }
         },
         lineItems: { orderBy: { sortOrder: "asc" } },
+        attachments: { orderBy: { createdAt: "asc" } },
         parentDocument: true,
         revisions: {
-          include: { lineItems: true },
+          include: { lineItems: true, attachments: true },
           orderBy: { revisionNo: "desc" }
         }
       }
@@ -112,9 +114,12 @@ export class DocumentsService {
         total: dto.price ?? totals.total,
         lineItems: {
           create: this.toLineItemCreates(lineItems)
+        },
+        attachments: {
+          create: this.toAttachmentCreates(dto.attachments)
         }
       },
-      include: { client: true, caseFile: true, lineItems: true }
+      include: { client: true, caseFile: true, lineItems: true, attachments: true }
     });
 
     if (!document.rootDocumentId) {
@@ -138,6 +143,7 @@ export class DocumentsService {
 
     await this.prisma.$transaction([
       this.prisma.lineItem.deleteMany({ where: { documentId: id } }),
+      this.prisma.attachment.deleteMany({ where: { documentId: id } }),
       this.prisma.document.update({
         where: { id },
         data: {
@@ -168,7 +174,8 @@ export class DocumentsService {
           bookingDate: dto.bookingDate ? new Date(dto.bookingDate) : null,
           subtotal: totals.subtotal,
           total: dto.price ?? totals.total,
-          lineItems: { create: this.toLineItemCreates(lineItems) }
+          lineItems: { create: this.toLineItemCreates(lineItems) },
+          attachments: { create: this.toAttachmentCreates(dto.attachments) }
         }
       })
     ]);
@@ -184,6 +191,7 @@ export class DocumentsService {
 
     await this.prisma.$transaction([
       this.prisma.lineItem.deleteMany({ where: { documentId: id } }),
+      this.prisma.attachment.deleteMany({ where: { documentId: id } }),
       this.prisma.document.updateMany({
         where: { parentDocumentId: id },
         data: { parentDocumentId: null }
@@ -246,7 +254,7 @@ export class DocumentsService {
   private async sendMailAndUpdateStatus(id: string) {
     let document = await this.prisma.document.findUnique({
       where: { id },
-      include: { client: true, caseFile: true, lineItems: { orderBy: { sortOrder: "asc" } } }
+      include: { client: true, caseFile: true, lineItems: { orderBy: { sortOrder: "asc" } }, attachments: true }
     });
     if (!document) throw new NotFoundException("Document not found");
 
@@ -255,7 +263,7 @@ export class DocumentsService {
         await this.ensurePaymentUrl(id);
         document = await this.prisma.document.findUnique({
           where: { id },
-          include: { client: true, caseFile: true, lineItems: { orderBy: { sortOrder: "asc" } } }
+          include: { client: true, caseFile: true, lineItems: { orderBy: { sortOrder: "asc" } }, attachments: true }
         });
         if (!document) throw new NotFoundException("Document not found");
       }
@@ -264,7 +272,7 @@ export class DocumentsService {
           ? await this.prisma.document.update({
               where: { id },
               data: { confirmationToken: createConfirmationToken() },
-              include: { client: true, caseFile: true, lineItems: { orderBy: { sortOrder: "asc" } } }
+              include: { client: true, caseFile: true, lineItems: { orderBy: { sortOrder: "asc" } }, attachments: true }
             })
           : document;
       await this.mail.sendDocumentMail(documentForMail);
@@ -340,6 +348,9 @@ export class DocumentsService {
             total: item.total,
             sortOrder: index
           }))
+        },
+        attachments: {
+          create: this.toAttachmentCreates(source.attachments)
         }
       }
     });
@@ -494,6 +505,17 @@ export class DocumentsService {
     }));
   }
 
+  private toAttachmentCreates(attachments: { name: string; mimeType?: string | null; size?: number | null; dataUrl: string }[] = []) {
+    return attachments
+      .filter((attachment) => attachment.name && attachment.dataUrl)
+      .map((attachment) => ({
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+        dataUrl: attachment.dataUrl
+      }));
+  }
+
   private async ensureExists(id: string) {
     const exists = await this.prisma.document.findUnique({ where: { id } });
     if (!exists) throw new NotFoundException("Document not found");
@@ -556,3 +578,4 @@ function publicApiBaseUrl() {
     return "http://localhost:3000/api";
   }
 }
+

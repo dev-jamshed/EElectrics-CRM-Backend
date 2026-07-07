@@ -17,10 +17,18 @@ export class AuthGuard implements CanActivate {
     ]);
     if (isPublic) return true;
 
-    const request = context.switchToHttp().getRequest<{ headers: Record<string, string | undefined> }>();
+    const request = context.switchToHttp().getRequest<{
+      headers: Record<string, string | undefined>;
+      query?: Record<string, string | string[] | undefined>;
+    }>();
     const expectedToken = this.config.get<string>("AUTH_TOKEN") ?? "modern-crm-local-token";
     const header = request.headers.authorization;
-    const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
+    const queryToken = request.query?.token;
+    const token = header?.startsWith("Bearer ")
+      ? header.slice(7)
+      : Array.isArray(queryToken)
+        ? queryToken[0]
+        : queryToken;
 
     if (token !== expectedToken) {
       throw new UnauthorizedException("Login required");
@@ -29,4 +37,3 @@ export class AuthGuard implements CanActivate {
     return true;
   }
 }
-

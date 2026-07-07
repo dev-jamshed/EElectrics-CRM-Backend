@@ -32,7 +32,8 @@ export class DocumentMailService {
       to,
       cc: document.cc || undefined,
       subject,
-      html: renderEmailHtml(document)
+      html: renderEmailHtml(document),
+      attachments: buildMailAttachments(document)
     });
   }
 
@@ -45,6 +46,43 @@ export class DocumentMailService {
 
 function renderEmailHtml(document: any) {
   return document.type === "BOOKING" ? renderBookingEmail(document) : renderDocumentEmail(document);
+}
+
+function buildMailAttachments(document: any) {
+  if (!document.sendImages || !Array.isArray(document.attachments)) return [];
+  return document.attachments
+    .map((attachment: any, index: number) => dataUrlToAttachment(attachment, index))
+    .filter(Boolean);
+}
+
+function dataUrlToAttachment(attachment: any, index: number) {
+  const dataUrl = String(attachment.dataUrl ?? "");
+  const match = dataUrl.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+  if (!match) return null;
+
+  const mimeType = attachment.mimeType || match[1] || "application/octet-stream";
+  const isBase64 = Boolean(match[2]);
+  const raw = match[3] ?? "";
+  const content = isBase64 ? Buffer.from(raw, "base64") : Buffer.from(decodeURIComponent(raw));
+  const filename = safeFilename(attachment.name || `image-${index + 1}.${extensionForMime(mimeType)}`);
+
+  return {
+    filename,
+    content,
+    contentType: mimeType
+  };
+}
+
+function safeFilename(value: string) {
+  const cleaned = value.replace(/[\\/:*?"<>|]+/g, "-").trim();
+  return cleaned || "image";
+}
+
+function extensionForMime(mimeType: string) {
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/webp") return "webp";
+  if (mimeType === "image/gif") return "gif";
+  return "jpg";
 }
 
 function renderBookingEmail(document: any) {

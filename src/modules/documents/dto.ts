@@ -28,6 +28,22 @@ export class LineItemDto {
   unitPrice: number;
 }
 
+
+export class AttachmentDto {
+  @IsString()
+  name: string;
+
+  @IsOptional()
+  @IsString()
+  mimeType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  size?: number;
+
+  @IsString()
+  dataUrl: string;
+}
 export class CreateDocumentDto {
   @IsIn(documentTypes)
   type: DocumentTypeValue;
@@ -129,6 +145,12 @@ export class CreateDocumentDto {
   pdfNotes?: string;
 
   @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => AttachmentDto)
+  attachments?: AttachmentDto[];
+
+  @IsOptional()
   @IsString()
   issueDate?: string;
 
@@ -153,3 +175,4 @@ export class CloneDocumentDto {
   @IsString()
   reason?: string;
 }
+

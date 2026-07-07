@@ -19,6 +19,7 @@ model Client {
   updatedAt DateTime   @updatedAt
   caseFiles CaseFile[]
   documents Document[]
+  emailThreads EmailThread[]
 
   @@index([firstName])
   @@index([email])
@@ -85,6 +86,8 @@ model Document {
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
   lineItems       LineItem[]
+  attachments     Attachment[]
+  emailThreads    EmailThread[]
 
   @@index([type])
   @@index([caseFileId])
@@ -105,7 +108,68 @@ model LineItem {
   sortOrder   Int          @default(0)
 }
 
+
+model Attachment {
+  id         String   @id @default(cuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  name       String
+  mimeType   String?
+  size       Int?
+  dataUrl    String
+  createdAt  DateTime @default(now())
+
+  @@index([documentId])
+}
+
+model EmailThread {
+  id           String         @id @default(cuid())
+  subject      String
+  normalizedSubject String?
+  fromEmail    String?
+  fromName     String?
+  toEmail      String?
+  documentId   String?
+  document     Document?      @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  clientId     String?
+  client       Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  unreadCount  Int            @default(0)
+  lastMessageAt DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  messages     EmailMessage[]
+
+  @@index([documentId])
+  @@index([clientId])
+  @@index([lastMessageAt])
+}
+
+model EmailMessage {
+  id          String      @id @default(cuid())
+  threadId    String
+  thread      EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  uid         Int?
+  messageId   String?     @unique
+  direction   String
+  fromEmail   String?
+  fromName    String?
+  toEmail     String?
+  subject     String
+  textBody    String?
+  htmlBody    String?
+  isRead      Boolean     @default(false)
+  sentAt      DateTime?
+  createdAt   DateTime    @default(now())
+
+  @@index([threadId])
+  @@index([uid])
+  @@index([direction])
+  @@index([isRead])
+}
+
 model Counter {
   id       String @id
   nextSeq  Int    @default(1)
 }
+
+
