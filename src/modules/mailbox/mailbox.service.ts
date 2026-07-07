@@ -17,7 +17,7 @@ const emailAttachmentListSelect = {
 @Injectable()
 export class MailboxService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MailboxService.name);
-  private readonly events = new Subject<{ unreadCount: number; imported?: number }>();
+  private readonly events = new Subject<{ unreadCount: number; imported?: number; latestThreadId?: string }>();
   private syncTimer?: ReturnType<typeof setInterval>;
   private watchRestartTimer?: ReturnType<typeof setTimeout>;
   private watchClient?: ImapFlow;
@@ -192,6 +192,81 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
       data: { lastMessageAt: message.sentAt ?? new Date() }
     });
     return this.detail(id);
+  }
+
+  async sendNewEmail(input: { to: string; subject: string; body: string; attachments?: MailboxAttachment[] }) {
+    const to = input.to?.trim();
+    const subject = input.subject?.trim();
+    const body = input.body ?? "";
+    const attachments = input.attachments ?? [];
+
+    if (!to) throw new BadRequestException("Recipient email is required");
+    if (!subject) throw new BadRequestException("Subject is required");
+    if (!body.trim() && attachments.length === 0) {
+      throw new BadRequestException("Email text or attachment is required");
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: this.config.get<string>("MAIL_HOST"),
+      port: Number(this.config.get<string>("MAIL_PORT") ?? 587),
+      secure: this.isSecureMail(),
+      auth: {
+        user: this.config.get<string>("MAIL_USERNAME"),
+        pass: this.config.get<string>("MAIL_PASSWORD")
+      }
+    });
+
+    const fromAddress = this.config.get<string>("MAIL_FROM_ADDRESS") ?? this.config.get<string>("MAIL_USERNAME");
+    const fromName = this.config.get<string>("MAIL_FROM_NAME") ?? "E Electrics Ltd";
+    const sent = await transporter.sendMail({
+      from: `"${fromName}" <${fromAddress}>`,
+      to,
+      subject,
+      text: body,
+      html: richText(body),
+      attachments: attachments.map((attachment) => ({
+        filename: attachment.originalname,
+        content: attachment.buffer,
+        contentType: attachment.mimetype
+      }))
+    });
+
+    const clientRecord = await this.findRelatedClient(to);
+    const thread = await this.prisma.emailThread.create({
+      data: {
+        subject,
+        normalizedSubject: normalizeSubject(subject),
+        fromEmail: to,
+        toEmail: to,
+        clientId: clientRecord?.id,
+        unreadCount: 0,
+        lastMessageAt: new Date(),
+        messages: {
+          create: {
+            messageId: sent.messageId,
+            direction: "OUTBOUND",
+            fromEmail: fromAddress,
+            fromName,
+            toEmail: to,
+            subject,
+            textBody: body,
+            htmlBody: richText(body),
+            isRead: true,
+            sentAt: new Date(),
+            attachments: {
+              create: attachments.map((attachment) => ({
+                name: attachment.originalname,
+                mimeType: attachment.mimetype,
+                size: attachment.size,
+                content: attachment.buffer
+              }))
+            }
+          }
+        }
+      }
+    });
+    await this.publishSummary();
+    return this.detail(thread.id);
   }
 
   async getAttachment(messageId: string, attachmentId: string) {
@@ -428,7 +503,7 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
 
   private async publishSummary(imported?: number) {
     const summary = await this.summary();
-    this.events.next({ unreadCount: summary.unreadCount, imported });
+    this.events.next({ unreadCount: summary.unreadCount, imported, latestThreadId: summary.latest?.id });
   }
 
   private async saveParsedAttachments(messageId: string, attachments: Array<{ filename?: string; contentType?: string; size?: number; content: Buffer }>) {

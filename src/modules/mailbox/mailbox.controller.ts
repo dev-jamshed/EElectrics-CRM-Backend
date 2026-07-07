@@ -71,6 +71,20 @@ export class MailboxController {
     return this.mailbox.reply(id, body.body ?? "", files, body.replyToMessageId);
   }
 
+  @Post("send")
+  @UseInterceptors(FilesInterceptor("attachments", 10, { limits: { fileSize: 15 * 1024 * 1024, files: 10 } }))
+  sendNewEmail(
+    @Body() body: { to?: string; subject?: string; body?: string },
+    @UploadedFiles() files: UploadedMailboxFile[] = []
+  ) {
+    return this.mailbox.sendNewEmail({
+      to: body.to ?? "",
+      subject: body.subject ?? "",
+      body: body.body ?? "",
+      attachments: files
+    });
+  }
+
   @Post("sync")
   sync() {
     return this.mailbox.syncInbox();
