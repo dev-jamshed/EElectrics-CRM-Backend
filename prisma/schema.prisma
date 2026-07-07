@@ -148,6 +148,9 @@ model EmailMessage {
   id          String      @id @default(cuid())
   threadId    String
   thread      EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  replyToMessageId String?
+  replyToMessage EmailMessage? @relation("EmailMessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies     EmailMessage[] @relation("EmailMessageReplies")
   uid         Int?
   messageId   String?     @unique
   direction   String
@@ -160,11 +163,26 @@ model EmailMessage {
   isRead      Boolean     @default(false)
   sentAt      DateTime?
   createdAt   DateTime    @default(now())
+  attachments EmailAttachment[]
 
   @@index([threadId])
+  @@index([replyToMessageId])
   @@index([uid])
   @@index([direction])
   @@index([isRead])
+}
+
+model EmailAttachment {
+  id          String       @id @default(cuid())
+  messageId   String
+  message     EmailMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  name        String
+  mimeType    String?
+  size        Int?
+  content     Bytes
+  createdAt   DateTime     @default(now())
+
+  @@index([messageId])
 }
 
 model Counter {

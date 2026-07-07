@@ -1,10 +1,18 @@
-import { Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import * as nodemailer from "nodemailer";
 import { Subject } from "rxjs";
 import { PrismaService } from "../../common/prisma.service";
+
+const emailAttachmentListSelect = {
+  id: true,
+  name: true,
+  mimeType: true,
+  size: true,
+  createdAt: true
+} as const;
 
 @Injectable()
 export class MailboxService implements OnModuleInit, OnModuleDestroy {
@@ -62,7 +70,8 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
         client: true,
         messages: {
           orderBy: { sentAt: "desc" },
-          take: 1
+          take: 1,
+          include: { attachments: { select: emailAttachmentListSelect } }
         }
       }
     });
@@ -74,7 +83,24 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
       include: {
         document: true,
         client: true,
-        messages: { orderBy: [{ sentAt: "asc" }, { createdAt: "asc" }] }
+        messages: {
+          orderBy: [{ sentAt: "asc" }, { createdAt: "asc" }],
+          include: {
+            attachments: { select: emailAttachmentListSelect },
+            replyToMessage: {
+              select: {
+                id: true,
+                direction: true,
+                fromEmail: true,
+                fromName: true,
+                subject: true,
+                textBody: true,
+                sentAt: true,
+                createdAt: true
+              }
+            }
+          }
+        }
       }
     });
     if (!thread) throw new NotFoundException("Email thread not found");
@@ -95,10 +121,19 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
     return this.detail(id);
   }
 
-  async reply(id: string, body: string) {
+  async reply(id: string, body: string, attachments: MailboxAttachment[] = [], replyToMessageId?: string) {
     const thread = await this.detail(id);
     const to = thread.fromEmail || thread.client?.email;
     if (!to) throw new NotFoundException("Reply email address not found");
+    if (!body?.trim() && attachments.length === 0) {
+      throw new BadRequestException("Reply text or attachment is required");
+    }
+    const replyToMessage = replyToMessageId
+      ? await this.prisma.emailMessage.findFirst({ where: { id: replyToMessageId, threadId: id } })
+      : undefined;
+    if (replyToMessageId && !replyToMessage) {
+      throw new NotFoundException("Reply target message not found");
+    }
 
     const subject = thread.subject.toLowerCase().startsWith("re:") ? thread.subject : `Re: ${thread.subject}`;
     const transporter = nodemailer.createTransport({
@@ -118,7 +153,14 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
       to,
       subject,
       text: body,
-      html: richText(body)
+      html: richText(body),
+      inReplyTo: formatMessageId(replyToMessage?.messageId),
+      references: formatMessageId(replyToMessage?.messageId),
+      attachments: attachments.map((attachment) => ({
+        filename: attachment.originalname,
+        content: attachment.buffer,
+        contentType: attachment.mimetype
+      }))
     });
 
     const message = await this.prisma.emailMessage.create({
@@ -132,8 +174,17 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
         subject,
         textBody: body,
         htmlBody: richText(body),
+        replyToMessageId: replyToMessage?.id,
         isRead: true,
-        sentAt: new Date()
+        sentAt: new Date(),
+        attachments: {
+          create: attachments.map((attachment) => ({
+            name: attachment.originalname,
+            mimeType: attachment.mimetype,
+            size: attachment.size,
+            content: attachment.buffer
+          }))
+        }
       }
     });
     await this.prisma.emailThread.update({
@@ -141,6 +192,81 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
       data: { lastMessageAt: message.sentAt ?? new Date() }
     });
     return this.detail(id);
+  }
+
+  async getAttachment(messageId: string, attachmentId: string) {
+    const attachment = await this.prisma.emailAttachment.findFirst({
+      where: { id: attachmentId, messageId }
+    });
+    if (!attachment) throw new NotFoundException("Attachment not found");
+    return attachment;
+  }
+
+  async deleteMessage(messageId: string) {
+    const message = await this.prisma.emailMessage.findUnique({
+      where: { id: messageId },
+      select: { id: true, threadId: true }
+    });
+    if (!message) throw new NotFoundException("Email message not found");
+
+    await this.prisma.emailMessage.delete({ where: { id: messageId } });
+    const remaining = await this.prisma.emailMessage.findMany({
+      where: { threadId: message.threadId },
+      orderBy: [{ sentAt: "desc" }, { createdAt: "desc" }],
+      select: { id: true, sentAt: true, createdAt: true, direction: true, isRead: true }
+    });
+
+    if (!remaining.length) {
+      await this.prisma.emailThread.delete({ where: { id: message.threadId } });
+      await this.publishSummary();
+      return { deleted: true, threadDeleted: true, threadId: message.threadId };
+    }
+
+    const unreadCount = remaining.filter((item) => item.direction === "INBOUND" && !item.isRead).length;
+    await this.prisma.emailThread.update({
+      where: { id: message.threadId },
+      data: {
+        unreadCount,
+        lastMessageAt: remaining[0].sentAt ?? remaining[0].createdAt
+      }
+    });
+    await this.publishSummary();
+
+    return { deleted: true, threadDeleted: false, threadId: message.threadId };
+  }
+
+  async backfillAttachments() {
+    const records = await this.prisma.emailMessage.findMany({
+      where: {
+        uid: { not: null },
+        attachments: { none: {} }
+      },
+      select: { id: true, uid: true }
+    });
+
+    if (!records.length) return { checked: 0, saved: 0 };
+
+    const client = this.createImapClient();
+    await client.connect();
+    let saved = 0;
+    try {
+      const lock = await client.getMailboxLock("INBOX");
+      try {
+        for (const record of records) {
+          if (!record.uid) continue;
+          const message = await client.fetchOne(String(record.uid), { source: true }, { uid: true });
+          if (!message || !message.source) continue;
+          const parsed = await simpleParser(message.source);
+          saved += await this.saveParsedAttachments(record.id, parsed.attachments);
+        }
+      } finally {
+        lock.release();
+      }
+    } finally {
+      await client.logout();
+    }
+
+    return { checked: records.length, saved };
   }
 
   async syncInbox() {
@@ -190,7 +316,15 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
               textBody: parsed.text,
               htmlBody: parsed.html || undefined,
               isRead: false,
-              sentAt: parsed.date
+              sentAt: parsed.date,
+              attachments: {
+                create: parsed.attachments.map((attachment) => ({
+                  name: attachment.filename || "attachment",
+                  mimeType: attachment.contentType,
+                  size: attachment.size,
+                  content: attachment.content
+                }))
+              }
             }
           });
           await this.prisma.emailThread.update({
@@ -297,6 +431,27 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
     this.events.next({ unreadCount: summary.unreadCount, imported });
   }
 
+  private async saveParsedAttachments(messageId: string, attachments: Array<{ filename?: string; contentType?: string; size?: number; content: Buffer }>) {
+    if (!attachments.length) return 0;
+    const existing = await this.prisma.emailAttachment.count({ where: { messageId } });
+    if (existing) return 0;
+
+    await this.prisma.emailMessage.update({
+      where: { id: messageId },
+      data: {
+        attachments: {
+          create: attachments.map((attachment) => ({
+            name: attachment.filename || "attachment",
+            mimeType: attachment.contentType,
+            size: attachment.size,
+            content: attachment.content
+          }))
+        }
+      }
+    });
+    return attachments.length;
+  }
+
   private hasInboundConfig() {
     const host = this.config.get<string>("IMAP_HOST") ?? this.config.get<string>("MAIL_HOST");
     const user = this.config.get<string>("IMAP_USERNAME") ?? this.config.get<string>("MAIL_USERNAME");
@@ -370,6 +525,13 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
   }
 }
 
+export type MailboxAttachment = {
+  originalname: string;
+  mimetype: string;
+  size?: number;
+  buffer: Buffer;
+};
+
 function normalizeSubject(subject: string) {
   return subject.replace(/^\s*(re|fw|fwd)\s*:\s*/i, "").trim().toLowerCase();
 }
@@ -381,6 +543,12 @@ function firstAddress(value: any) {
 
 function normalizeMessageId(messageId?: string) {
   return messageId?.trim().replace(/^<|>$/g, "");
+}
+
+function formatMessageId(messageId?: string | null) {
+  if (!messageId) return undefined;
+  const normalized = normalizeMessageId(messageId);
+  return normalized ? `<${normalized}>` : undefined;
 }
 
 function richText(value: string) {
