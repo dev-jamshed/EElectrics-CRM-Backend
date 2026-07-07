@@ -582,7 +582,6 @@ function renderIncludeFooter(document: any, total: number) {
 }
 
 function renderPaymentMethodSection(document: any, type: string) {
-  const paymentUrl = escapeAttribute(document.paymentUrl || publicPaymentUrl(document));
   if (type === "INVOICE") {
     return `<div class="payment-section">
       <p class="payment-heading">Payment Method</p>
@@ -596,7 +595,6 @@ function renderPaymentMethodSection(document: any, type: string) {
         </ul>
         <p style="font-size: 11px; color: #666; margin-top: 15px; margin-bottom: 0px; font-style: italic; text-align: center;">Please use invoice number as reference</p>
       </div>
-      <p class="stripe-small">Alternative payment option: <a href="${paymentUrl}">Online card payment</a></p>
     </div>`;
   }
 
@@ -604,18 +602,13 @@ function renderPaymentMethodSection(document: any, type: string) {
     <p class="payment-heading">Payment Method</p>
     <table class="payment-grid">
       <tr class="payment-tr">
-        <td class="payment-td">
+        <td class="payment-td" colspan="2">
           <ul class="payment-ul">
             <li><strong>Bank Name:</strong> &nbsp;Barclays Bank</li>
             <li><strong>Account Name:</strong> &nbsp;E electrics limited</li>
             <li><strong>Account No:</strong> &nbsp;23929884</li>
             <li><strong>SortCode:</strong> &nbsp;202519</li>
           </ul>
-        </td>
-        <td class="stripe-td">
-          <p style="font-weight: bold; font-size:13px;color: black; margin-bottom: 3px;margin-top: 0px;">Online Payment via Stripe</p>
-          <p style="font-size:12px; margin-top: 4px;">Conveniently make your payment online by clicking the following link, which will redirect you to our secure payment portal <br>powered by Stripe.</p>
-          <a href="${paymentUrl}" class="pay-now">PayNow</a>
         </td>
       </tr>
     </table>

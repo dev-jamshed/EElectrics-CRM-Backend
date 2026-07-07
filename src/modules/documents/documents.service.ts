@@ -15,10 +15,15 @@ export class DocumentsService {
   ) {}
 
   list(filters: { type?: DocumentTypeValue; status?: string; q?: string }) {
+    const statusFilter =
+      filters.type === "INVOICE" && filters.status === "SENT"
+        ? { in: ["SENT", "PAID"] as DocumentStatusValue[] }
+        : (filters.status as DocumentStatusValue | undefined);
+
     return this.prisma.document.findMany({
       where: {
         type: filters.type,
-        status: filters.status as DocumentStatusValue | undefined,
+        status: statusFilter,
         OR: filters.q
           ? [
               { documentNo: { contains: filters.q } },
@@ -129,7 +134,7 @@ export class DocumentsService {
       });
     }
 
-    if (dto.sendMail && dto.type !== "BOOKING") await this.ensurePaymentUrl(document.id);
+    if (dto.sendMail && dto.type === "INVOICE") await this.ensurePaymentUrl(document.id);
     if (dto.sendMail) await this.sendMailAndUpdateStatus(document.id);
 
     return this.detail(document.id);
@@ -180,7 +185,7 @@ export class DocumentsService {
       })
     ]);
 
-    if (dto.sendMail && dto.type !== "BOOKING") await this.ensurePaymentUrl(id);
+    if (dto.sendMail && dto.type === "INVOICE") await this.ensurePaymentUrl(id);
     if (dto.sendMail) await this.sendMailAndUpdateStatus(id);
 
     return this.detail(id);
@@ -259,7 +264,7 @@ export class DocumentsService {
     if (!document) throw new NotFoundException("Document not found");
 
     try {
-      if (document.type !== "BOOKING") {
+      if (document.type === "INVOICE") {
         await this.ensurePaymentUrl(id);
         document = await this.prisma.document.findUnique({
           where: { id },
@@ -364,10 +369,11 @@ export class DocumentsService {
       include: { client: true }
     });
     if (!document) throw new NotFoundException("Document not found");
-    if (document.type === "BOOKING") throw new BadRequestException("Booking does not have online payment");
-    if (document.paymentUrl) return document.paymentUrl;
+    if (document.type !== "INVOICE") throw new BadRequestException("Only invoices have online payment");
+    const secret = stripeSecret();
+    if (document.paymentUrl && paymentUrlMatchesStripeMode(document.paymentUrl, secret)) return document.paymentUrl;
 
-    const paymentUrl = await this.createStripeCheckoutUrl(document);
+    const paymentUrl = await this.createStripeCheckoutUrl(document, secret);
     await this.prisma.document.update({
       where: { id },
       data: { paymentUrl }
@@ -376,7 +382,8 @@ export class DocumentsService {
   }
 
   async markPaidFromPayment(id: string) {
-    await this.ensureExists(id);
+    const document = await this.ensureExists(id);
+    if (document.type !== "INVOICE") throw new BadRequestException("Only invoices can be marked paid from payment");
     await this.prisma.document.update({
       where: { id },
       data: {
@@ -389,7 +396,8 @@ export class DocumentsService {
   }
 
   async markPaid(id: string) {
-    await this.ensureExists(id);
+    const document = await this.ensureExists(id);
+    if (document.type !== "INVOICE") throw new BadRequestException("Only invoices can be marked paid");
     return this.prisma.document.update({
       where: { id },
       data: {
@@ -522,10 +530,10 @@ export class DocumentsService {
     return exists;
   }
 
-  private async createStripeCheckoutUrl(document: { id: string; documentNo: string; type: string; price: unknown; total: unknown; addressLine?: string | null }) {
-    const secret = (process.env.STRIPE_SECRET ?? "").replace(/\s+/g, "").trim();
-    if (!secret) throw new BadRequestException("Stripe secret key is missing");
-
+  private async createStripeCheckoutUrl(
+    document: { id: string; documentNo: string; type: string; price: unknown; total: unknown; addressLine?: string | null },
+    secret: string
+  ) {
     const amount = Math.round(Number(document.price ?? document.total ?? 0) * 100);
     if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException("Payment amount is invalid");
 
@@ -558,6 +566,18 @@ export class DocumentsService {
 
 function createConfirmationToken() {
   return randomBytes(45).toString("base64url");
+}
+
+function stripeSecret() {
+  const secret = (process.env.STRIPE_SECRET ?? "").replace(/\s+/g, "").trim();
+  if (!secret) throw new BadRequestException("Stripe secret key is missing");
+  return secret;
+}
+
+function paymentUrlMatchesStripeMode(paymentUrl: string, secret: string) {
+  if (secret.startsWith("sk_test_")) return paymentUrl.includes("cs_test_");
+  if (secret.startsWith("sk_live_")) return paymentUrl.includes("cs_live_");
+  return true;
 }
 
 function publicApiBaseUrl() {

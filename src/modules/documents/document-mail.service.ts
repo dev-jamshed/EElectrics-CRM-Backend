@@ -288,8 +288,8 @@ function renderIncludeRow(document: any, total: number) {
 }
 
 function renderPaymentMethodSection(document: any, type: string) {
-  const paymentUrl = escapeAttribute(document.paymentUrl || publicPaymentUrl(document));
   if (type === "INVOICE") {
+    const paymentUrl = escapeAttribute(publicPaymentUrl(document));
     return `<tr>
       <td colspan="2">
         <table>
@@ -341,18 +341,13 @@ function renderPaymentMethodSection(document: any, type: string) {
             </table>
             <table>
               <tr class="payment-tr">
-                <td class="payment-td">
+                <td class="payment-td" colspan="2">
                   <ul class="padding-bottom-sm payment-ul" style="list-style-type:none;font-size:13px;padding-left:0px;padding-top:0px;margin-top:0px;">
                     <li style="padding-left:0px;margin-left:0px;"><strong>Bank Name:</strong> &nbsp;Barclays Bank</li>
                     <li style="padding-left:0px;margin-left:0px;"><strong>Account Name:</strong> &nbsp;E electrics limited</li>
                     <li style="padding-left:0px;margin-left:0px;"><strong>Account No:</strong> &nbsp;23929884</li>
                     <li style="padding-left:0px;margin-left:0px;"><strong>SortCode:</strong> &nbsp;202519</li>
                   </ul>
-                </td>
-                <td class="stripe-td">
-                  <p style="font-weight:bold;font-size:13px;color:black;margin-bottom:3px;margin-top:0px;">Online Payment via Stripe</p>
-                  <p style="font-size:12px;margin-top:4px;">Conveniently make your payment online by clicking the following link, which will redirect you to our secure payment portal <br>powered by Stripe.</p>
-                  <a href="${paymentUrl}" class="pay-now">PayNow</a>
                 </td>
               </tr>
             </table>
