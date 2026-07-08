@@ -166,6 +166,7 @@ function renderDocumentEmail(document: any) {
   const total = amount(document.price ?? document.total);
   const includeRow = renderIncludeRow(document, total);
   const paymentSection = renderPaymentMethodSection(document, String(document.type ?? ""));
+  const lineItemRows = renderEmailLineItems(document.lineItems);
   const downloadUrl = documentDownloadUrl(document);
   const downloadLabel = isInvoice ? "View & Download invoice PDF" : "View & Download quotation PDF";
 
@@ -258,11 +259,14 @@ function renderDocumentEmail(document: any) {
             <p style="margin-bottom:0px!important;margin-top:0px!important;padding:10px 0px;"><img width="20" style="padding-right:5px;vertical-align:middle;" src="${ARROW_URL}" alt=""> ${escapeHtml(document.jobTitle || "")}</p>
           </td>
         </tr>
-        <tr class="item">
-          <td colspan="2" width="100%" style="background:PapayaWhip;word-wrap:break-word;page-break-inside:avoid;padding:0px 20px;font-size:13px!important;" class="mail-desc">
-            ${body || "-"}
-          </td>
-        </tr>
+        ${
+          lineItemRows ||
+          `<tr class="item">
+            <td colspan="2" width="100%" style="background:PapayaWhip;word-wrap:break-word;page-break-inside:avoid;padding:0px 20px;font-size:13px!important;" class="mail-desc">
+              ${body || "-"}
+            </td>
+          </tr>`
+        }
         ${includeRow}
         <tr class="heading"><td>Total to be Paid</td><td>${formatPounds(total)}</td></tr>
         ${notes ? `<tr><td colspan="2" style="width:100%!important;overflow-wrap:break-word!important;padding-top:15px;font-size:12.5px;"><p style="margin-bottom:0px;padding-top:10px;margin-top:0px;padding-bottom:5px;font-weight:bold;" class="sub-heading">Notes:</p><table><tr><td class="display-block-sm" style="height:1px;border-bottom:1.5px solid #DD2D3E;display:block!important;"></td></tr></table>${notes}</td></tr>` : ""}
@@ -285,6 +289,27 @@ function renderIncludeRow(document: any, total: number) {
   const label = includeTotalLabel(parseInclude(document.includeOptions));
   if (!label) return "";
   return `<tr class="first_heading"><td>${escapeHtml(label)}</td><td>${formatPounds(total)}</td></tr>`;
+}
+
+function renderEmailLineItems(items: any[] = []) {
+  const rows = items.filter((item) => item?.title || item?.description || Number(item?.unitPrice || 0));
+  if (!rows.length) return "";
+  return rows
+    .map((item) => {
+      const quantity = Number(item.quantity || 0);
+      const unitPrice = Number(item.unitPrice || 0);
+      const total = quantity * unitPrice;
+      const detail = item.description ? `<br><span style="font-size:12px;color:#555;">${escapeHtml(item.description)}</span>` : "";
+      return `<tr class="item">
+        <td width="75%" style="border-bottom:1px solid #DD2D3E;background:PapayaWhip;word-wrap:break-word;page-break-inside:avoid;padding:10px 20px;font-size:13px!important;">
+          <strong>${escapeHtml(item.title || "-")}</strong>${detail}<br><span style="font-size:12px;color:#666;">Qty ${quantity} x ${formatPounds(unitPrice)}</span>
+        </td>
+        <td width="25%" style="border-bottom:1px solid #DD2D3E;background:PapayaWhip;word-wrap:break-word;page-break-inside:avoid;padding:10px 20px;font-size:13px!important;text-align:right;font-weight:bold;">
+          ${formatPounds(total)}
+        </td>
+      </tr>`;
+    })
+    .join("");
 }
 
 function renderPaymentMethodSection(document: any, type: string) {

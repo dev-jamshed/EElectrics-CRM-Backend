@@ -38,6 +38,7 @@ function renderOldInvoiceQuotationTemplate(document: any) {
   const total = amount(document.price ?? document.total);
   const includeFooter = renderIncludeFooter(document, total);
   const paymentSection = renderPaymentMethodSection(document, type);
+  const lineItemRows = renderPdfLineItems(document.lineItems);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -352,9 +353,7 @@ function renderOldInvoiceQuotationTemplate(document: any) {
                 <img width="20px" style="padding-right: 5px;" src="${ARROW_URL}" alt="">
                 <p>${escapeHtml(document.jobTitle || "")}</p>
               </div>
-              <div class="description-div">
-                ${body || "-"}
-              </div>
+              ${lineItemRows || `<div class="description-div">${body || "-"}</div>`}
             </div>
             <div class="description-footer">
               ${includeFooter}
@@ -579,6 +578,23 @@ function renderIncludeFooter(document: any, total: number) {
   const label = includeTotalLabel(parseInclude(document.includeOptions));
   if (!label) return "";
   return `<div class="discount-price-footer"><p>${escapeHtml(label)}</p><p>${formatPounds(total)}</p></div>`;
+}
+
+function renderPdfLineItems(items: any[] = []) {
+  const rows = items.filter((item) => item?.title || item?.description || Number(item?.unitPrice || 0));
+  if (!rows.length) return "";
+  return rows
+    .map((item) => {
+      const quantity = Number(item.quantity || 0);
+      const unitPrice = Number(item.unitPrice || 0);
+      const total = quantity * unitPrice;
+      const detail = item.description ? `<br><span style="font-size:12px;color:#555;">${escapeHtml(item.description)}</span>` : "";
+      return `<div class="job-description-div" style="justify-content:space-between;gap:20px;">
+        <p><strong>${escapeHtml(item.title || "-")}</strong>${detail}<br><span style="font-size:12px;color:#666;">Qty ${quantity} x ${formatPounds(unitPrice)}</span></p>
+        <p style="white-space:nowrap;font-weight:bold;">${formatPounds(total)}</p>
+      </div>`;
+    })
+    .join("");
 }
 
 function renderPaymentMethodSection(document: any, type: string) {
