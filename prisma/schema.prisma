@@ -134,6 +134,9 @@ model EmailThread {
   clientId     String?
   client       Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
   unreadCount  Int            @default(0)
+  isStarred    Boolean        @default(false)
+  archivedAt   DateTime?
+  trashedAt    DateTime?
   lastMessageAt DateTime?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
@@ -141,6 +144,9 @@ model EmailThread {
 
   @@index([documentId])
   @@index([clientId])
+  @@index([isStarred])
+  @@index([archivedAt])
+  @@index([trashedAt])
   @@index([lastMessageAt])
 }
 

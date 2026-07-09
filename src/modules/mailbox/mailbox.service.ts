@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import type { Prisma } from "@prisma/client";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import * as nodemailer from "nodemailer";
@@ -13,6 +14,8 @@ const emailAttachmentListSelect = {
   size: true,
   createdAt: true
 } as const;
+
+const emptyMailboxFolders = new Set(["drafts"]);
 
 @Injectable()
 export class MailboxService implements OnModuleInit, OnModuleDestroy {
@@ -48,22 +51,51 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   async summary() {
-    const unreadCount = await this.prisma.emailMessage.count({
-      where: { direction: "INBOUND", isRead: false }
-    });
+    const visibleMailboxWhere = { archivedAt: null, trashedAt: null } as const;
+    const [unreadCount, inbox, sent, unread, attachments, starred, trash, archived] = await Promise.all([
+      this.prisma.emailMessage.count({
+        where: {
+          direction: "INBOUND",
+          isRead: false,
+          thread: visibleMailboxWhere
+        }
+      }),
+      this.prisma.emailThread.count({ where: this.folderWhere("inbox") }),
+      this.prisma.emailThread.count({ where: this.folderWhere("sent") }),
+      this.prisma.emailThread.count({ where: this.folderWhere("unread") }),
+      this.prisma.emailThread.count({ where: this.folderWhere("attachments") }),
+      this.prisma.emailThread.count({ where: this.folderWhere("starred") }),
+      this.prisma.emailThread.count({ where: this.folderWhere("trash") }),
+      this.prisma.emailThread.count({ where: this.folderWhere("archived") })
+    ]);
     const latest = await this.prisma.emailThread.findFirst({
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
       include: { document: true, client: true }
     });
-    return { unreadCount, latest };
+    return {
+      unreadCount,
+      latest,
+      folderCounts: {
+        inbox,
+        sent,
+        unread,
+        attachments,
+        starred,
+        drafts: 0,
+        trash,
+        archived
+      }
+    };
   }
 
   stream() {
     return this.events.asObservable();
   }
 
-  list() {
+  list(folder = "inbox") {
+    if (emptyMailboxFolders.has(folder)) return [];
     return this.prisma.emailThread.findMany({
+      where: this.folderWhere(folder),
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
       include: {
         document: true,
@@ -75,6 +107,86 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
         }
       }
     });
+  }
+
+  private folderWhere(folder: string): Prisma.EmailThreadWhereInput {
+    if (folder === "starred") {
+      return { isStarred: true, trashedAt: null };
+    }
+    if (folder === "trash") {
+      return { trashedAt: { not: null } };
+    }
+    if (folder === "archived") {
+      return { archivedAt: { not: null }, trashedAt: null };
+    }
+    if (folder === "sent") {
+      return { archivedAt: null, trashedAt: null, messages: { some: { direction: "OUTBOUND" } } };
+    }
+    if (folder === "unread") {
+      return { archivedAt: null, trashedAt: null, unreadCount: { gt: 0 } };
+    }
+    if (folder === "attachments") {
+      return { archivedAt: null, trashedAt: null, messages: { some: { attachments: { some: {} } } } };
+    }
+    return { archivedAt: null, trashedAt: null, messages: { some: { direction: "INBOUND" } } };
+  }
+
+  async toggleStar(id: string) {
+    const thread = await this.prisma.emailThread.findUnique({ where: { id }, select: { isStarred: true } });
+    if (!thread) throw new NotFoundException("Email thread not found");
+    await this.prisma.emailThread.update({
+      where: { id },
+      data: { isStarred: !thread.isStarred }
+    });
+    await this.publishSummary();
+    return this.detail(id);
+  }
+
+  async toggleArchive(id: string) {
+    const thread = await this.prisma.emailThread.findUnique({ where: { id }, select: { archivedAt: true } });
+    if (!thread) throw new NotFoundException("Email thread not found");
+    await this.prisma.emailThread.update({
+      where: { id },
+      data: {
+        archivedAt: thread.archivedAt ? null : new Date(),
+        trashedAt: null
+      }
+    });
+    await this.publishSummary();
+    return this.detail(id);
+  }
+
+  async trashThread(id: string) {
+    await this.detail(id);
+    await this.prisma.emailThread.update({
+      where: { id },
+      data: {
+        archivedAt: null,
+        trashedAt: new Date()
+      }
+    });
+    await this.publishSummary();
+    return this.detail(id);
+  }
+
+  async restoreThread(id: string) {
+    await this.detail(id);
+    await this.prisma.emailThread.update({
+      where: { id },
+      data: {
+        archivedAt: null,
+        trashedAt: null
+      }
+    });
+    await this.publishSummary();
+    return this.detail(id);
+  }
+
+  async deleteThread(id: string) {
+    await this.detail(id);
+    await this.prisma.emailThread.delete({ where: { id } });
+    await this.publishSummary();
+    return { deleted: true, threadId: id };
   }
 
   async detail(id: string) {

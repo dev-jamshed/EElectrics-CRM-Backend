@@ -353,7 +353,8 @@ function renderOldInvoiceQuotationTemplate(document: any) {
                 <img width="20px" style="padding-right: 5px;" src="${ARROW_URL}" alt="">
                 <p>${escapeHtml(document.jobTitle || "")}</p>
               </div>
-              ${lineItemRows || `<div class="description-div">${body || "-"}</div>`}
+              ${body ? `<div class="description-div">${body}</div>` : ""}
+              ${lineItemRows || (!body ? `<div class="description-div">-</div>` : "")}
             </div>
             <div class="description-footer">
               ${includeFooter}

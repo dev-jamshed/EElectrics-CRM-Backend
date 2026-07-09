@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, MessageEvent, Param, Post, Res, Sse, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Delete, Get, MessageEvent, Param, Post, Query, Res, Sse, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { FilesInterceptor } from "@nestjs/platform-express";
 import type { Response } from "express";
 import { map, Observable } from "rxjs";
@@ -25,8 +25,8 @@ export class MailboxController {
   }
 
   @Get("threads")
-  threads() {
-    return this.mailbox.list();
+  threads(@Query("folder") folder?: string) {
+    return this.mailbox.list(folder);
   }
 
   @Get("threads/:id")
@@ -51,9 +51,34 @@ export class MailboxController {
     return this.mailbox.deleteMessage(messageId);
   }
 
+  @Delete("threads/:id")
+  deleteThread(@Param("id") id: string) {
+    return this.mailbox.deleteThread(id);
+  }
+
   @Post("threads/:id/read")
   markRead(@Param("id") id: string) {
     return this.mailbox.markRead(id);
+  }
+
+  @Post("threads/:id/star")
+  toggleStar(@Param("id") id: string) {
+    return this.mailbox.toggleStar(id);
+  }
+
+  @Post("threads/:id/archive")
+  toggleArchive(@Param("id") id: string) {
+    return this.mailbox.toggleArchive(id);
+  }
+
+  @Post("threads/:id/trash")
+  trashThread(@Param("id") id: string) {
+    return this.mailbox.trashThread(id);
+  }
+
+  @Post("threads/:id/restore")
+  restoreThread(@Param("id") id: string) {
+    return this.mailbox.restoreThread(id);
   }
 
   @Post("threads/:id/reply")
