@@ -51,7 +51,7 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   async summary() {
-    const visibleMailboxWhere = { archivedAt: null, trashedAt: null } as const;
+    const visibleMailboxWhere = { archivedAt: null, trashedAt: null, deletedAt: null } as const;
     const [unreadCount, inbox, sent, unread, attachments, starred, trash, archived] = await Promise.all([
       this.prisma.emailMessage.count({
         where: {
@@ -69,6 +69,7 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
       this.prisma.emailThread.count({ where: this.folderWhere("archived") })
     ]);
     const latest = await this.prisma.emailThread.findFirst({
+      where: { deletedAt: null },
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
       include: { document: true, client: true }
     });
@@ -111,24 +112,24 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
 
   private folderWhere(folder: string): Prisma.EmailThreadWhereInput {
     if (folder === "starred") {
-      return { isStarred: true, trashedAt: null };
+      return { isStarred: true, trashedAt: null, deletedAt: null };
     }
     if (folder === "trash") {
-      return { trashedAt: { not: null } };
+      return { trashedAt: { not: null }, deletedAt: null };
     }
     if (folder === "archived") {
-      return { archivedAt: { not: null }, trashedAt: null };
+      return { archivedAt: { not: null }, trashedAt: null, deletedAt: null };
     }
     if (folder === "sent") {
-      return { archivedAt: null, trashedAt: null, messages: { some: { direction: "OUTBOUND" } } };
+      return { archivedAt: null, trashedAt: null, deletedAt: null, messages: { some: { direction: "OUTBOUND" } } };
     }
     if (folder === "unread") {
-      return { archivedAt: null, trashedAt: null, unreadCount: { gt: 0 } };
+      return { archivedAt: null, trashedAt: null, deletedAt: null, unreadCount: { gt: 0 } };
     }
     if (folder === "attachments") {
-      return { archivedAt: null, trashedAt: null, messages: { some: { attachments: { some: {} } } } };
+      return { archivedAt: null, trashedAt: null, deletedAt: null, messages: { some: { attachments: { some: {} } } } };
     }
-    return { archivedAt: null, trashedAt: null, messages: { some: { direction: "INBOUND" } } };
+    return { archivedAt: null, trashedAt: null, deletedAt: null, messages: { some: { direction: "INBOUND" } } };
   }
 
   async toggleStar(id: string) {
@@ -184,7 +185,15 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
 
   async deleteThread(id: string) {
     await this.detail(id);
-    await this.prisma.emailThread.delete({ where: { id } });
+    await this.prisma.emailThread.update({
+      where: { id },
+      data: {
+        archivedAt: null,
+        trashedAt: null,
+        deletedAt: new Date(),
+        unreadCount: 0
+      }
+    });
     await this.publishSummary();
     return { deleted: true, threadId: id };
   }
@@ -669,7 +678,8 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
         OR: [
           ...(input.documentId ? [{ documentId: input.documentId }] : []),
           { normalizedSubject, fromEmail: input.fromEmail }
-        ]
+        ],
+        deletedAt: null
       },
       orderBy: { updatedAt: "desc" }
     });

@@ -137,6 +137,7 @@ model EmailThread {
   isStarred    Boolean        @default(false)
   archivedAt   DateTime?
   trashedAt    DateTime?
+  deletedAt    DateTime?
   lastMessageAt DateTime?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
@@ -147,6 +148,7 @@ model EmailThread {
   @@index([isStarred])
   @@index([archivedAt])
   @@index([trashedAt])
+  @@index([deletedAt])
   @@index([lastMessageAt])
 }
 
