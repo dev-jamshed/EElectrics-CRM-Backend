@@ -69,7 +69,7 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
       this.prisma.emailThread.count({ where: this.folderWhere("archived") })
     ]);
     const latest = await this.prisma.emailThread.findFirst({
-      where: { deletedAt: null },
+      where: visibleMailboxWhere,
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
       include: { document: true, client: true }
     });
