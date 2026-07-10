@@ -281,6 +281,7 @@ export class DocumentsService {
             })
           : document;
       await this.mail.sendDocumentMail(documentForMail);
+      await this.recordOutboundDocumentEmail(documentForMail);
       await this.prisma.document.update({
         where: { id },
         data: { status: "SENT", emailStatus: "SENT", emailError: null, sentAt: new Date() }
@@ -294,6 +295,63 @@ export class DocumentsService {
         }
       });
     }
+  }
+
+  private async recordOutboundDocumentEmail(document: any) {
+    const subject = documentEmailSubject(document);
+    const now = new Date();
+    const fromEmail = process.env.MAIL_FROM_ADDRESS || process.env.MAIL_USERNAME || "admin@eelectrics.co.uk";
+    const fromName = process.env.MAIL_FROM_NAME || "E Electrics Ltd";
+    const toEmail = document.client?.email;
+    const textBody =
+      document.type === "BOOKING"
+        ? `Booking confirmation email sent for ${document.documentNo}. Please confirm your booking using the link in the email.`
+        : `${titleForDocument(document.type)} email sent for ${document.documentNo}.`;
+
+    const thread =
+      (await this.prisma.emailThread.findFirst({
+        where: { documentId: document.id, deletedAt: null },
+        orderBy: { updatedAt: "desc" }
+      })) ??
+      (await this.prisma.emailThread.create({
+        data: {
+          subject,
+          normalizedSubject: normalizeEmailSubject(subject),
+          fromEmail: toEmail,
+          fromName: [document.client?.firstName, document.client?.lastName].filter(Boolean).join(" ") || undefined,
+          toEmail,
+          documentId: document.id,
+          clientId: document.clientId,
+          unreadCount: 0,
+          lastMessageAt: now
+        }
+      }));
+
+    await this.prisma.emailMessage.create({
+      data: {
+        threadId: thread.id,
+        messageId: `document-${document.id}-${Date.now()}`,
+        direction: "OUTBOUND",
+        fromEmail,
+        fromName,
+        toEmail,
+        subject,
+        textBody,
+        isRead: true,
+        sentAt: now
+      }
+    });
+    await this.prisma.emailThread.update({
+      where: { id: thread.id },
+      data: {
+        subject,
+        normalizedSubject: normalizeEmailSubject(subject),
+        documentId: document.id,
+        clientId: document.clientId,
+        toEmail,
+        lastMessageAt: now
+      }
+    });
   }
 
   async cloneAsRevision(id: string, _dto: CloneDocumentDto) {
@@ -566,6 +624,24 @@ export class DocumentsService {
 
 function createConfirmationToken() {
   return randomBytes(45).toString("base64url");
+}
+
+function documentEmailSubject(document: any) {
+  const id = document.documentNo || document.id || "-";
+  const address = document.addressLine || document.selectedAddress || "-";
+  if (document.type === "BOOKING") return `Booking from Eelectrics LTD | ${id} | ${address}`;
+  if (document.type === "QUOTATION") return `Quotation from Eelectrics LTD | ${id} | ${address}`;
+  return `Invoice from Eelectrics LTD | ${id} | ${address}`;
+}
+
+function normalizeEmailSubject(subject: string) {
+  return subject.replace(/^\s*(re|fw|fwd)\s*:\s*/i, "").trim().toLowerCase();
+}
+
+function titleForDocument(type: string) {
+  if (type === "BOOKING") return "Booking";
+  if (type === "QUOTATION") return "Quotation";
+  return "Invoice";
 }
 
 function stripeSecret() {

@@ -29,6 +29,11 @@ export class MailboxController {
     return this.mailbox.list(folder);
   }
 
+  @Get("documents/:documentId/thread")
+  documentThread(@Param("documentId") documentId: string) {
+    return this.mailbox.detailByDocument(documentId);
+  }
+
   @Get("threads/:id")
   thread(@Param("id") id: string) {
     return this.mailbox.detail(id);

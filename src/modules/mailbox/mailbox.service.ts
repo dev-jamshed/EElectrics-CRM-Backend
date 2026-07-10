@@ -110,6 +110,78 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  async detailByDocument(documentId: string) {
+    const document = await this.prisma.document.findUnique({
+      where: { id: documentId },
+      select: { id: true, documentNo: true, clientId: true, client: { select: { email: true } } }
+    });
+    if (!document) return null;
+
+    const exactMatches: Prisma.EmailThreadWhereInput[] = [
+      { documentId },
+      { subject: { contains: document.documentNo } },
+      { normalizedSubject: { contains: document.documentNo.toLowerCase() } },
+      { messages: { some: { subject: { contains: document.documentNo } } } },
+      { messages: { some: { textBody: { contains: document.documentNo } } } },
+      { messages: { some: { htmlBody: { contains: document.documentNo } } } }
+    ];
+    const fallbackMatches: Prisma.EmailThreadWhereInput[] = [
+      ...(document.clientId ? [{ clientId: document.clientId }] : []),
+      ...(document.client?.email
+        ? [
+            { fromEmail: document.client.email },
+            { toEmail: document.client.email },
+            { messages: { some: { fromEmail: document.client.email } } },
+            { messages: { some: { toEmail: document.client.email } } }
+          ]
+        : [])
+    ];
+
+    const include = {
+      document: true,
+      client: true,
+      messages: {
+        orderBy: [{ sentAt: "asc" as const }, { createdAt: "asc" as const }],
+        include: {
+          attachments: { select: emailAttachmentListSelect },
+          replyToMessage: {
+            select: {
+              id: true,
+              direction: true,
+              fromEmail: true,
+              fromName: true,
+              subject: true,
+              textBody: true,
+              sentAt: true,
+              createdAt: true
+            }
+          }
+        }
+      }
+    };
+
+    const exactThread = await this.prisma.emailThread.findFirst({
+      where: { deletedAt: null, OR: exactMatches },
+      orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
+      include
+    });
+    if (exactThread && !exactThread.documentId) {
+      await this.prisma.emailThread.update({
+        where: { id: exactThread.id },
+        data: { documentId }
+      });
+      return this.detail(exactThread.id);
+    }
+    if (exactThread) return exactThread;
+    if (!fallbackMatches.length) return null;
+
+    return this.prisma.emailThread.findFirst({
+      where: { deletedAt: null, OR: fallbackMatches },
+      orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
+      include
+    });
+  }
+
   private folderWhere(folder: string): Prisma.EmailThreadWhereInput {
     if (folder === "starred") {
       return { isStarred: true, trashedAt: null, deletedAt: null };
