@@ -14,7 +14,7 @@ export class DocumentsService {
     private readonly mail: DocumentMailService
   ) {}
 
-  list(filters: { type?: DocumentTypeValue; status?: string; q?: string }) {
+  list(filters: { type?: DocumentTypeValue; status?: string; q?: string; clientId?: string }) {
     const statusFilter =
       filters.type === "INVOICE" && filters.status === "SENT"
         ? { in: ["SENT", "PAID"] as DocumentStatusValue[] }
@@ -24,6 +24,7 @@ export class DocumentsService {
       where: {
         type: filters.type,
         status: statusFilter,
+        clientId: filters.clientId,
         OR: filters.q
           ? [
               { documentNo: { contains: filters.q } },

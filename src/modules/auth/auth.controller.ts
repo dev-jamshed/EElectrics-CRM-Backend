@@ -1,9 +1,20 @@
-import { Body, Controller, Get, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Post } from "@nestjs/common";
 import { IsEmail, IsString } from "class-validator";
 import { AuthService } from "./auth.service";
 import { Public } from "./public.decorator";
 
 class LoginDto {
+  @IsEmail()
+  email: string;
+
+  @IsString()
+  password: string;
+}
+
+class CreateUserDto {
+  @IsString()
+  name: string;
+
   @IsEmail()
   email: string;
 
@@ -24,5 +35,20 @@ export class AuthController {
   @Get("me")
   me() {
     return this.auth.me();
+  }
+
+  @Get("users")
+  users() {
+    return this.auth.users();
+  }
+
+  @Post("users")
+  createUser(@Body() dto: CreateUserDto) {
+    return this.auth.createUser(dto);
+  }
+
+  @Delete("users/:id")
+  deleteUser(@Param("id") id: string) {
+    return this.auth.deleteUser(id);
   }
 }

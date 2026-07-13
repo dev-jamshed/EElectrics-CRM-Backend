@@ -10,9 +10,10 @@ export class DocumentsController {
   list(
     @Query("type") type?: DocumentTypeValue,
     @Query("status") status?: string,
-    @Query("q") q?: string
+    @Query("q") q?: string,
+    @Query("clientId") clientId?: string
   ) {
-    return this.documents.list({ type, status, q });
+    return this.documents.list({ type, status, q, clientId });
   }
 
   @Get(":id")
