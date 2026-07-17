@@ -52,12 +52,13 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
 
   async summary() {
     const visibleMailboxWhere = { archivedAt: null, trashedAt: null, deletedAt: null } as const;
-    const [unreadCount, inbox, sent, unread, attachments, starred, trash, archived] = await Promise.all([
+    const inboxWhere = this.folderWhere("inbox");
+    const [inboxUnreadCount, inbox, sent, unread, attachments, starred, trash, archived] = await Promise.all([
       this.prisma.emailMessage.count({
         where: {
           direction: "INBOUND",
           isRead: false,
-          thread: visibleMailboxWhere
+          thread: inboxWhere
         }
       }),
       this.prisma.emailThread.count({ where: this.folderWhere("inbox") }),
@@ -69,15 +70,17 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
       this.prisma.emailThread.count({ where: this.folderWhere("archived") })
     ]);
     const latest = await this.prisma.emailThread.findFirst({
-      where: visibleMailboxWhere,
+      where: inboxWhere,
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
       include: { document: true, client: true }
     });
     return {
-      unreadCount,
+      unreadCount: inboxUnreadCount,
+      inboxUnreadCount,
       latest,
       folderCounts: {
         inbox,
+        inboxUnread: inboxUnreadCount,
         sent,
         unread,
         attachments,
@@ -387,9 +390,10 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
     return this.detail(id);
   }
 
-  async sendNewEmail(input: { to: string; subject: string; body: string; attachments?: MailboxAttachment[] }) {
+  async sendNewEmail(input: { to: string; cc?: string; subject: string; body: string; attachments?: MailboxAttachment[] }) {
     const to = input.to?.trim();
     const subject = input.subject?.trim();
+    const cc = input.cc?.trim() || undefined;
     const body = input.body ?? "";
     const attachments = input.attachments ?? [];
 
@@ -414,6 +418,7 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
     const sent = await transporter.sendMail({
       from: `"${fromName}" <${fromAddress}>`,
       to,
+      cc,
       subject,
       text: body,
       html: richText(body),

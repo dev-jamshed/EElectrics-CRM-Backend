@@ -3,32 +3,33 @@ import { PrismaService } from "../../common/prisma.service";
 
 const LOGO_URL = "https://res.cloudinary.com/djneoqoqk/image/upload/v1734727264/email_logo_aqoox6.png";
 const ARROW_URL = "https://res.cloudinary.com/djneoqoqk/image/upload/v1706693281/icons8-down-right-64_jbnhgq.png";
+type PdfRenderMode = "preview" | "view" | "download";
 
 @Injectable()
 export class PdfService {
   constructor(private readonly prisma: PrismaService) {}
 
   async preview(id: string) {
-    const html = await this.renderHtml(id);
+    const html = await this.renderHtml(id, "preview");
     return { html };
   }
 
-  async renderHtml(id: string) {
+  async renderHtml(id: string, mode: PdfRenderMode = "view") {
     const document = await this.prisma.document.findUnique({
       where: { id },
       include: { client: true, caseFile: true, lineItems: { orderBy: { sortOrder: "asc" } } }
     });
     if (!document) throw new NotFoundException("Document not found");
 
-    return renderOldCrmPdf(document);
+    return renderOldCrmPdf(document, mode);
   }
 }
 
-function renderOldCrmPdf(document: any) {
-  return document.type === "BOOKING" ? renderOldBookingTemplate(document) : renderOldInvoiceQuotationTemplate(document);
+function renderOldCrmPdf(document: any, mode: PdfRenderMode) {
+  return document.type === "BOOKING" ? renderOldBookingTemplate(document, mode) : renderOldInvoiceQuotationTemplate(document, mode);
 }
 
-function renderOldInvoiceQuotationTemplate(document: any) {
+function renderOldInvoiceQuotationTemplate(document: any, mode: PdfRenderMode) {
   const type = String(document.type ?? "").toUpperCase();
   const title = type === "QUOTATION" ? "Quotation" : "Invoice";
   const clientName = [document.client?.firstName, document.client?.lastName].filter(Boolean).join(" ");
@@ -311,7 +312,7 @@ function renderOldInvoiceQuotationTemplate(document: any) {
     }
   </style>
 </head>
-<body onload="generatePdf()">
+<body${mode === "preview" ? "" : ' onload="generatePdf()"'}>
   <div id="outer">
     <div id="doc-target">
       <div id="lipsum">
@@ -371,35 +372,12 @@ function renderOldInvoiceQuotationTemplate(document: any) {
       </div>
     </div>
   </div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  <script>
-    window.jsPDF = window.jspdf && window.jspdf.jsPDF;
-    function generatePdf() {
-      var htmlElement = document.getElementById('doc-target');
-      if (!window.jsPDF || !htmlElement) return;
-      var jsPdf = new window.jsPDF('p', 'pt', 'a4');
-      jsPdf.html(htmlElement, {
-        callback: function(pdf) {
-          window.location.href = pdf.output('bloburl');
-        },
-        margin: [20, 0, 20, 0],
-        autoPaging: 'text',
-        html2canvas: {
-          allowTaint: true,
-          dpi: 300,
-          letterRendering: true,
-          logging: false,
-          scale: 0.8
-        }
-      });
-    }
-  </script>
+  ${pdfClientScripts(document, mode, 0.8)}
 </body>
 </html>`;
 }
 
-function renderOldBookingTemplate(document: any) {
+function renderOldBookingTemplate(document: any, mode: PdfRenderMode) {
   const clientName = [document.client?.firstName, document.client?.lastName].filter(Boolean).join(" ");
   const greeting = richText(document.greeting || document.description || "");
   const notes = richText(document.emailNote || "");
@@ -496,9 +474,9 @@ function renderOldBookingTemplate(document: any) {
     }
   </style>
 </head>
-<body>
+<body${mode === "preview" ? "" : ' onload="generatePdf()"'}>
   <div class="color-container" style="background:#d3d3d321;width: 100%;height: 100%;padding: 50px 0px;">
-    <div class="invoice-box">
+    <div id="doc-target" class="invoice-box">
       <table>
         <tr class="top">
           <td style="padding: 20px 30px;padding-bottom: 0px;">
@@ -571,8 +549,45 @@ function renderOldBookingTemplate(document: any) {
       </table>
     </div>
   </div>
+  ${pdfClientScripts(document, mode, 0.7)}
 </body>
 </html>`;
+}
+
+function pdfClientScripts(document: any, mode: PdfRenderMode, scale: number) {
+  if (mode === "preview") return "";
+
+  const type = String(document.type || "Document").toLowerCase();
+  const documentNo = String(document.documentNo || document.id || "document");
+  const filename = `${type}-${documentNo}.pdf`.replace(/[^a-z0-9._-]+/gi, "-");
+  const completion = mode === "download"
+    ? `pdf.save(${JSON.stringify(filename)}); window.setTimeout(function() { window.close(); }, 500);`
+    : "window.location.href = pdf.output('bloburl');";
+
+  return `<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script>
+    window.jsPDF = window.jspdf && window.jspdf.jsPDF;
+    function generatePdf() {
+      var htmlElement = document.getElementById('doc-target');
+      if (!window.jsPDF || !htmlElement) return;
+      var jsPdf = new window.jsPDF('p', 'pt', 'a4');
+      jsPdf.html(htmlElement, {
+        callback: function(pdf) {
+          ${completion}
+        },
+        margin: [20, 0, 20, 0],
+        autoPaging: 'text',
+        html2canvas: {
+          allowTaint: true,
+          dpi: 300,
+          letterRendering: true,
+          logging: false,
+          scale: ${scale}
+        }
+      });
+    }
+  </script>`;
 }
 
 function renderIncludeFooter(document: any, total: number) {

@@ -6,8 +6,8 @@ import { UpsertClientDto } from "./dto";
 export class ClientsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(q?: string) {
-    return this.prisma.client.findMany({
+  async list(q?: string) {
+    const clients = await this.prisma.client.findMany({
       where: q
         ? {
             OR: [
@@ -20,6 +20,17 @@ export class ClientsService {
           }
         : undefined,
       include: {
+        documents: {
+          where: { caseFileId: null },
+          select: { type: true }
+        },
+        caseFiles: {
+          include: {
+            documents: {
+              select: { type: true }
+            }
+          }
+        },
         _count: {
           select: {
             documents: true,
@@ -28,6 +39,26 @@ export class ClientsService {
         }
       },
       orderBy: { updatedAt: "desc" }
+    });
+
+    return clients.map((client) => {
+      const totals = {
+        bookings: 0,
+        invoices: 0,
+        quotations: 0
+      };
+      const allDocuments = [
+        ...client.documents,
+        ...client.caseFiles.flatMap((file) => file.documents)
+      ];
+      for (const doc of allDocuments) {
+        if (doc.type === "BOOKING") totals.bookings += 1;
+        if (doc.type === "INVOICE") totals.invoices += 1;
+        if (doc.type === "QUOTATION") totals.quotations += 1;
+      }
+
+      const { documents, caseFiles, ...rest } = client;
+      return { ...rest, totals };
     });
   }
 
@@ -101,4 +132,3 @@ export class ClientsService {
     });
   }
 }
-

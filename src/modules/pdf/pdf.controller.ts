@@ -1,4 +1,4 @@
-import { Controller, Get, Header, Param } from "@nestjs/common";
+import { Controller, Get, Header, Param, Query } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
 import { PdfService } from "./pdf.service";
 
@@ -14,7 +14,7 @@ export class PdfController {
   @Public()
   @Get("documents/:id/download")
   @Header("Content-Type", "text/html; charset=utf-8")
-  download(@Param("id") id: string) {
-    return this.pdf.renderHtml(id);
+  download(@Param("id") id: string, @Query("action") action?: string) {
+    return this.pdf.renderHtml(id, action === "download" ? "download" : "view");
   }
 }

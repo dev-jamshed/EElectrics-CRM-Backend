@@ -104,11 +104,12 @@ export class MailboxController {
   @Post("send")
   @UseInterceptors(FilesInterceptor("attachments", 10, { limits: { fileSize: 15 * 1024 * 1024, files: 10 } }))
   sendNewEmail(
-    @Body() body: { to?: string; subject?: string; body?: string },
+    @Body() body: { to?: string; cc?: string; subject?: string; body?: string },
     @UploadedFiles() files: UploadedMailboxFile[] = []
   ) {
     return this.mailbox.sendNewEmail({
       to: body.to ?? "",
+      cc: body.cc ?? "",
       subject: body.subject ?? "",
       body: body.body ?? "",
       attachments: files
