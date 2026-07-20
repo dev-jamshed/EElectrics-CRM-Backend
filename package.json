@@ -8,6 +8,7 @@
     "lint": "eslint \"src/**/*.ts\"",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
+    "db:normalize-revisions": "tsx prisma/normalize-document-revisions.ts",
     "db:studio": "prisma studio",
     "seed": "tsx prisma/seed.ts"
   },

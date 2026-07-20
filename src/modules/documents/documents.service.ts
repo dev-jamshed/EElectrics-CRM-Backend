@@ -77,11 +77,11 @@ export class DocumentsService {
 
   async create(dto: CreateDocumentDto) {
     const clientId = await this.resolveClientId(dto);
-    const duplicateBooking = dto.type === "BOOKING" ? await this.findDuplicateBooking(dto, clientId) : undefined;
+    const duplicateBooking = dto.type === "BOOKING" && !dto.createAsClone ? await this.findDuplicateBooking(dto, clientId) : undefined;
     if (duplicateBooking) return this.detail(duplicateBooking.id);
 
     const caseFile = await this.resolveCaseFile(dto, clientId);
-    const documentNo = await this.counters.nextDocumentNo(dto.type, caseFile?.serialNo);
+    const documentNo = await this.counters.nextDocumentNo(dto.type);
     const lineItems = dto.type === "BOOKING" ? [] : dto.lineItems ?? [];
     const totals = this.calculateTotals(lineItems);
 
@@ -363,13 +363,20 @@ export class DocumentsService {
       orderBy: { revisionNo: "desc" }
     });
     const nextRevision = (latestRevision?.revisionNo ?? source.revisionNo) + 1;
-    const documentNo = await this.counters.nextDocumentNo(source.type as DocumentTypeValue, source.caseFile?.serialNo);
+    const rootDocument =
+      source.id === rootDocumentId
+        ? source
+        : await this.prisma.document.findUnique({
+            where: { id: rootDocumentId },
+            select: { documentNo: true }
+          });
+    if (!rootDocument) throw new NotFoundException("Root document not found");
 
     const clone = await this.prisma.document.create({
       data: {
         type: source.type,
         status: "DRAFT",
-        documentNo,
+        documentNo: rootDocument.documentNo,
         caseFileId: source.caseFileId,
         clientId: source.clientId,
         parentDocumentId: source.id,
@@ -675,4 +682,3 @@ function publicApiBaseUrl() {
     return "http://localhost:3000/api";
   }
 }
-

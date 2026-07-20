@@ -40,7 +40,7 @@ model Document {
   id              String         @id @default(cuid())
   type            String
   status          String         @default("DRAFT")
-    documentNo      String         @unique
+    documentNo      String
     confirmationToken String?      @unique
     bookingConfirmed Boolean       @default(false)
     confirmedAt     DateTime?
@@ -89,6 +89,7 @@ model Document {
   attachments     Attachment[]
   emailThreads    EmailThread[]
 
+  @@unique([documentNo, revisionNo])
   @@index([type])
   @@index([caseFileId])
   @@index([clientId])

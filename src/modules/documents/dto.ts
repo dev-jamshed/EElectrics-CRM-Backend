@@ -70,6 +70,10 @@ export class CreateDocumentDto {
   sourceDocumentId?: string;
 
   @IsOptional()
+  @IsBoolean()
+  createAsClone?: boolean;
+
+  @IsOptional()
   @IsString()
   parentDocumentId?: string;
 
@@ -175,4 +179,3 @@ export class CloneDocumentDto {
   @IsString()
   reason?: string;
 }
-

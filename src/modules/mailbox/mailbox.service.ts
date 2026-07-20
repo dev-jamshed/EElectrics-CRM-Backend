@@ -778,10 +778,11 @@ export class MailboxService implements OnModuleInit, OnModuleDestroy {
 
   private async findRelatedDocument(subject: string, body: string) {
     const haystack = `${subject}\n${body}`;
-    const match = haystack.match(/\b(BKG|INV|QUO)-\d+-\d+\b/i);
+    const match = haystack.match(/\b(?:BKG|INV|QTN|QUO)-(?:\d+-\d+|\d{4})\b/i);
     if (!match) return undefined;
-    return this.prisma.document.findUnique({
+    return this.prisma.document.findFirst({
       where: { documentNo: match[0].toUpperCase() },
+      orderBy: { revisionNo: "desc" },
       include: { client: true }
     });
   }
