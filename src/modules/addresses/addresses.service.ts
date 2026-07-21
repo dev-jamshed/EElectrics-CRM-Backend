@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, ServiceUnavailableException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 
 type AddressSuggestion = {
@@ -7,7 +7,22 @@ type AddressSuggestion = {
   line: string;
   city?: string;
   postcode?: string;
-  source: "woosmap" | "postcodes.io";
+  source: "woosmap";
+};
+
+type WoosmapLocality = {
+  public_id?: string;
+  description?: string;
+};
+
+type WoosmapAddress = {
+  public_id?: string;
+  description?: string;
+};
+
+type WoosmapAddressComponent = {
+  types?: string[];
+  long_name?: string;
 };
 
 @Injectable()
@@ -15,90 +30,91 @@ export class AddressesService {
   constructor(private readonly config: ConfigService) {}
 
   async search(query: string): Promise<AddressSuggestion[]> {
-    const key = this.config.get<string>("WOOSMAP_API_KEY");
-    const normalizedQuery = query.trim();
-    if (key && normalizedQuery.length > 2) {
-      try {
-        const url = new URL("https://api.woosmap.com/localities/autocomplete/");
-        url.searchParams.set("key", key);
-        url.searchParams.set("input", normalizedQuery);
-        url.searchParams.set("language", "en");
-        url.searchParams.set("components", "country:gb");
-        url.searchParams.set("types", "postal_code,address");
-        const response = await fetch(url);
-        const data = (await response.json()) as {
-          localities?: Array<{ public_id: string; description: string; matched_substrings?: unknown[] }>;
-        };
-        const suggestions = (data.localities ?? []).map((item) => ({
-          id: item.public_id,
-          label: item.description,
-          line: item.description,
-          source: "woosmap" as const
-        }));
-        if (suggestions.length) return suggestions;
-      } catch {
-        // Fall through to the no-key postcode lookup.
-      }
+    const normalizedQuery = query.trim().replace(/\s+/g, " ");
+    if (normalizedQuery.length < 2) return [];
+
+    const key = this.config.get<string>("WOOSMAP_API_KEY")?.trim();
+    if (!key) throw new ServiceUnavailableException("Address lookup is not configured");
+
+    try {
+      const locality = await this.findPostalLocality(normalizedQuery, key);
+      if (!locality?.public_id) return [];
+      return await this.loadLocalityAddresses(locality.public_id, normalizedQuery, key);
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) throw error;
+      throw new ServiceUnavailableException("Address lookup is temporarily unavailable");
     }
-
-    const postcodeSuggestions = await this.postcodeSuggestions(normalizedQuery);
-    if (postcodeSuggestions.length) return postcodeSuggestions;
-
-    return [];
   }
 
-  private async postcodeSuggestions(query: string): Promise<AddressSuggestion[]> {
-    if (query.length < 2) return [];
-    try {
-      const exact = await this.lookupPostcode(query);
-      if (exact) return [exact];
+  private async findPostalLocality(query: string, key: string): Promise<WoosmapLocality | undefined> {
+    const url = new URL("https://api.woosmap.com/localities/autocomplete/");
+    url.searchParams.set("key", key);
+    url.searchParams.set("input", query);
+    url.searchParams.set("language", "en");
+    url.searchParams.set("components", "country:gb");
+    url.searchParams.set("types", "postal_code,address");
 
-      const url = new URL(`https://api.postcodes.io/postcodes/${encodeURIComponent(query)}/autocomplete`);
-      const response = await fetch(url);
-      if (!response.ok) return [];
-      const data = (await response.json()) as { result?: string[] };
-      return (data.result ?? []).slice(0, 8).map((postcode) => ({
-        id: `postcodes-io-${postcode}`,
-        label: postcode,
-        line: postcode,
+    const response = await this.woosmapFetch(url);
+    if (!response.ok) throw new ServiceUnavailableException("Address lookup provider rejected the request");
+    const data = (await response.json()) as { localities?: WoosmapLocality[] };
+    const localities = data.localities ?? [];
+    const normalizedPostcode = compactPostcode(query);
+
+    return localities.find((item) => compactPostcode(item.description?.split(",")[0] ?? "") === normalizedPostcode) ?? localities[0];
+  }
+
+  private async loadLocalityAddresses(publicId: string, query: string, key: string): Promise<AddressSuggestion[]> {
+    const url = new URL("https://api.woosmap.com/localities/details/");
+    url.searchParams.set("key", key);
+    url.searchParams.set("public_id", publicId);
+    url.searchParams.set("language", "en");
+    url.searchParams.set("components", "country:gb");
+
+    const response = await this.woosmapFetch(url);
+    if (!response.ok) throw new ServiceUnavailableException("Address lookup provider rejected the request");
+    const data = (await response.json()) as {
+      result?: {
+        name?: string;
+        address_components?: WoosmapAddressComponent[];
+        addresses?: { list?: WoosmapAddress[] };
+      };
+    };
+    const result = data.result;
+    const postcode = result?.name?.trim() || query.toUpperCase();
+    const city = result?.address_components?.find((component) =>
+      component.types?.some((type) => type === "district" || type === "locality")
+    )?.long_name;
+
+    return (result?.addresses?.list ?? [])
+      .filter((item): item is Required<Pick<WoosmapAddress, "description">> & WoosmapAddress => Boolean(item.description?.trim()))
+      .map((item, index) => ({
+        id: item.public_id || `woosmap-${publicId}-${index}`,
+        label: item.description.trim(),
+        line: item.description.trim(),
+        city,
         postcode,
-        source: "postcodes.io" as const
+        source: "woosmap"
       }));
-    } catch {
-      return [];
-    }
   }
 
-  private async lookupPostcode(query: string): Promise<AddressSuggestion | undefined> {
-    try {
-      const url = new URL(`https://api.postcodes.io/postcodes/${encodeURIComponent(query)}`);
-      const response = await fetch(url);
-      if (!response.ok) return undefined;
-      const data = (await response.json()) as {
-        result?: {
-          postcode?: string;
-          admin_district?: string;
-          admin_ward?: string;
-          region?: string;
-          country?: string;
-          parish?: string;
-        };
-      };
-      const result = data.result;
-      if (!result?.postcode) return undefined;
-      const parts = [result.admin_ward, result.admin_district, result.region].filter(Boolean);
-      const line = [result.postcode, ...parts].join(", ");
-      return {
-        id: `postcodes-io-${result.postcode}`,
-        label: line,
-        line,
-        city: result.admin_district,
-        postcode: result.postcode,
-        source: "postcodes.io"
-      };
-    } catch {
-      return undefined;
-    }
-  }
+  private woosmapFetch(url: URL) {
+    const referer =
+      this.config.get<string>("WOOSMAP_REFERER")?.trim() ||
+      this.config.get<string>("APP_URL")?.trim() ||
+      this.config.get<string>("PUBLIC_APP_URL")?.trim() ||
+      "https://crm.eelectrics.co.uk/";
 
+    return fetch(url, {
+      headers: { Referer: ensureTrailingSlash(referer) },
+      signal: AbortSignal.timeout(10_000)
+    });
+  }
+}
+
+function compactPostcode(value: string) {
+  return value.replace(/\s+/g, "").toUpperCase();
+}
+
+function ensureTrailingSlash(value: string) {
+  return value.endsWith("/") ? value : `${value}/`;
 }
