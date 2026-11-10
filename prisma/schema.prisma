@@ -66,6 +66,14 @@ model Document {
   addressLine     String?
   extraAddress    String?
   selectedAddress String?
+  hasOccupier     Boolean        @default(false)
+  occupierFirstName String?
+  occupierLastName String?
+  occupierPhone   String?
+  occupierPostalCode String?
+  occupierAddressLine String?
+  occupierExtraAddress String?
+  occupierSelectedAddress String?
   price           Decimal      @default(0)
   includeOptions  String?
   sendMail        Boolean      @default(false)
@@ -78,6 +86,7 @@ model Document {
   emailError      String?
   subtotal        Decimal        @default(0)
   total           Decimal        @default(0)
+  paidAmount      Decimal        @default(0)
   paymentStatus   String         @default("NOT_PAID")
   paymentUrl      String?
   pdfUrl          String?
@@ -88,6 +97,7 @@ model Document {
   lineItems       LineItem[]
   attachments     Attachment[]
   emailThreads    EmailThread[]
+  paymentRecords  PaymentRecord[]
 
   @@unique([documentNo, revisionNo])
   @@index([type])
@@ -197,6 +207,18 @@ model EmailAttachment {
 model Counter {
   id       String @id
   nextSeq  Int    @default(1)
+}
+
+model PaymentRecord {
+  id         String   @id @default(cuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  amount     Decimal  @default(0)
+  note       String?
+  method     String   @default("BANK_TRANSFER")
+  paidAt     DateTime @default(now())
+
+  @@index([documentId])
 }
 
 

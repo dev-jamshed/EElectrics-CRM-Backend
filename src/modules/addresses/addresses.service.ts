@@ -33,34 +33,28 @@ export class AddressesService {
     const normalizedQuery = query.trim().replace(/\s+/g, " ");
     if (normalizedQuery.length < 2) return [];
 
-    const key = this.config.get<string>("WOOSMAP_API_KEY")?.trim();
-    if (!key) throw new ServiceUnavailableException("Address lookup is not configured");
+    const key = this.config.get<string>("WOOSMAP_API_KEY")?.trim() || "woos-c819f572-d85e-3c98-9b70-36926ff3d715";
 
     try {
-      const locality = await this.findPostalLocality(normalizedQuery, key);
-      if (!locality?.public_id) return [];
-      return await this.loadLocalityAddresses(locality.public_id, normalizedQuery, key);
+      const url = new URL("https://api.woosmap.com/localities/autocomplete/");
+      url.searchParams.set("key", key);
+      url.searchParams.set("input", normalizedQuery);
+      url.searchParams.set("language", "en");
+      url.searchParams.set("components", "country:gb");
+      url.searchParams.set("types", "postal_code,address");
+
+      const response = await this.woosmapFetch(url);
+      if (!response.ok) throw new ServiceUnavailableException("Address lookup provider rejected the request");
+      const data = (await response.json()) as { localities?: WoosmapLocality[] };
+      const localities = data.localities ?? [];
+      if (!localities.length || !localities[0]?.public_id) return [];
+
+      const publicId = localities[0].public_id;
+      return await this.loadLocalityAddresses(publicId, normalizedQuery, key);
     } catch (error) {
       if (error instanceof ServiceUnavailableException) throw error;
       throw new ServiceUnavailableException("Address lookup is temporarily unavailable");
     }
-  }
-
-  private async findPostalLocality(query: string, key: string): Promise<WoosmapLocality | undefined> {
-    const url = new URL("https://api.woosmap.com/localities/autocomplete/");
-    url.searchParams.set("key", key);
-    url.searchParams.set("input", query);
-    url.searchParams.set("language", "en");
-    url.searchParams.set("components", "country:gb");
-    url.searchParams.set("types", "postal_code,address");
-
-    const response = await this.woosmapFetch(url);
-    if (!response.ok) throw new ServiceUnavailableException("Address lookup provider rejected the request");
-    const data = (await response.json()) as { localities?: WoosmapLocality[] };
-    const localities = data.localities ?? [];
-    const normalizedPostcode = compactPostcode(query);
-
-    return localities.find((item) => compactPostcode(item.description?.split(",")[0] ?? "") === normalizedPostcode) ?? localities[0];
   }
 
   private async loadLocalityAddresses(publicId: string, query: string, key: string): Promise<AddressSuggestion[]> {

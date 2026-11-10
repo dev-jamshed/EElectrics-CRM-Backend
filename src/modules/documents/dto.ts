@@ -116,8 +116,43 @@ export class CreateDocumentDto {
   selectedAddress?: unknown;
 
   @IsOptional()
+  @IsBoolean()
+  hasOccupier?: boolean;
+
+  @IsOptional()
+  @IsString()
+  occupierFirstName?: string;
+
+  @IsOptional()
+  @IsString()
+  occupierLastName?: string;
+
+  @IsOptional()
+  @IsString()
+  occupierPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  occupierPostalCode?: string;
+
+  @IsOptional()
+  @IsString()
+  occupierAddressLine?: string;
+
+  @IsOptional()
+  @IsString()
+  occupierExtraAddress?: string;
+
+  @IsOptional()
+  occupierSelectedAddress?: unknown;
+
+  @IsOptional()
   @IsNumber()
   price?: number;
+
+  @IsOptional()
+  @IsNumber()
+  paidAmount?: number;
 
   @IsOptional()
   @IsArray()
@@ -178,4 +213,21 @@ export class CloneDocumentDto {
   @IsOptional()
   @IsString()
   reason?: string;
+}
+
+export class RecordPaymentDto {
+  @IsNumber()
+  amount: number;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
+
+  @IsOptional()
+  @IsString()
+  method?: string;
+
+  @IsOptional()
+  @IsString()
+  paidAt?: string;
 }

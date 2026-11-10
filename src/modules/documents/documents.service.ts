@@ -3,7 +3,7 @@ import { randomBytes } from "crypto";
 import Stripe = require("stripe");
 import { CountersService } from "./../../common/counters.service";
 import { PrismaService } from "../../common/prisma.service";
-import { CloneDocumentDto, CreateDocumentDto, DocumentStatusValue, DocumentTypeValue, LineItemDto, UpdateDocumentDto } from "./dto";
+import { CloneDocumentDto, CreateDocumentDto, DocumentStatusValue, DocumentTypeValue, LineItemDto, RecordPaymentDto, UpdateDocumentDto } from "./dto";
 import { DocumentMailService } from "./document-mail.service";
 
 @Injectable()
@@ -65,8 +65,11 @@ export class DocumentsService {
         attachments: { orderBy: { createdAt: "asc" } },
         parentDocument: true,
         revisions: {
-          include: { lineItems: true, attachments: true },
+          include: { lineItems: true, attachments: true, paymentRecords: true },
           orderBy: { revisionNo: "desc" }
+        },
+        paymentRecords: {
+          orderBy: { paidAt: "desc" }
         }
       }
     });
@@ -84,11 +87,17 @@ export class DocumentsService {
     const documentNo = await this.counters.nextDocumentNo(dto.type);
     const lineItems = dto.type === "BOOKING" ? [] : dto.lineItems ?? [];
     const totals = this.calculateTotals(lineItems);
+    const totalAmount = dto.price ?? totals.total;
+    const initialPaid = Math.max(0, Number(dto.paidAmount || 0));
+    const isFullyPaid = initialPaid >= totalAmount && totalAmount > 0;
+    const isPartiallyPaid = initialPaid > 0 && initialPaid < totalAmount;
+    const computedPaymentStatus = isFullyPaid ? "PAID" : isPartiallyPaid ? "PARTIALLY_PAID" : "NOT_PAID";
+    const computedStatus = dto.sendMail ? "SENT" : isFullyPaid ? "PAID" : isPartiallyPaid ? "PARTIALLY_PAID" : (dto.status ?? "DRAFT");
 
     const document = await this.prisma.document.create({
       data: {
         type: dto.type,
-        status: dto.sendMail ? "SENT" : dto.status ?? "DRAFT",
+        status: computedStatus,
         documentNo,
         confirmationToken: dto.type === "BOOKING" ? createConfirmationToken() : undefined,
         caseFileId: caseFile?.id,
@@ -103,7 +112,15 @@ export class DocumentsService {
         addressLine: dto.addressLine,
         extraAddress: dto.extraAddress,
         selectedAddress: dto.selectedAddress ? JSON.stringify(dto.selectedAddress) : undefined,
-        price: dto.price ?? totals.total,
+        hasOccupier: Boolean(dto.hasOccupier),
+        occupierFirstName: dto.occupierFirstName?.trim() || null,
+        occupierLastName: dto.occupierLastName?.trim() || null,
+        occupierPhone: dto.occupierPhone?.trim() || null,
+        occupierPostalCode: dto.occupierPostalCode?.trim() || null,
+        occupierAddressLine: dto.occupierAddressLine?.trim() || null,
+        occupierExtraAddress: dto.occupierExtraAddress?.trim() || null,
+        occupierSelectedAddress: dto.occupierSelectedAddress ? JSON.stringify(dto.occupierSelectedAddress) : undefined,
+        price: totalAmount,
         includeOptions: dto.includeOptions?.length ? JSON.stringify(dto.includeOptions) : undefined,
         sendMail: dto.sendMail ?? false,
         sendImages: dto.sendImages ?? false,
@@ -117,15 +134,26 @@ export class DocumentsService {
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
         bookingDate: dto.bookingDate ? new Date(dto.bookingDate) : undefined,
         subtotal: totals.subtotal,
-        total: dto.price ?? totals.total,
+        total: totalAmount,
+        paidAmount: initialPaid,
+        paymentStatus: computedPaymentStatus,
+        paidAt: isFullyPaid ? new Date() : undefined,
         lineItems: {
           create: this.toLineItemCreates(lineItems)
         },
         attachments: {
           create: this.toAttachmentCreates(dto.attachments)
-        }
+        },
+        paymentRecords: initialPaid > 0 ? {
+          create: [{
+            amount: initialPaid,
+            note: isFullyPaid ? "Paid in full" : "Initial partial payment / deposit",
+            method: "BANK_TRANSFER",
+            paidAt: new Date()
+          }]
+        } : undefined
       },
-      include: { client: true, caseFile: true, lineItems: true, attachments: true }
+      include: { client: true, caseFile: true, lineItems: true, attachments: true, paymentRecords: true }
     });
 
     if (!document.rootDocumentId) {
@@ -146,6 +174,12 @@ export class DocumentsService {
     const clientId = await this.resolveClientId(dto);
     const lineItems = dto.type === "BOOKING" ? [] : dto.lineItems ?? [];
     const totals = this.calculateTotals(lineItems);
+    const totalAmount = dto.price ?? totals.total;
+    const existingDoc = await this.prisma.document.findUnique({ where: { id }, select: { paidAmount: true, paymentStatus: true } });
+    const currentPaid = dto.paidAmount !== undefined ? Math.max(0, Number(dto.paidAmount)) : Number(existingDoc?.paidAmount ?? 0);
+    const isFullyPaid = currentPaid >= totalAmount && totalAmount > 0;
+    const isPartiallyPaid = currentPaid > 0 && currentPaid < totalAmount;
+    const updatedPaymentStatus = isFullyPaid ? "PAID" : isPartiallyPaid ? "PARTIALLY_PAID" : (existingDoc?.paymentStatus === "PAID" ? "PAID" : "NOT_PAID");
 
     await this.prisma.$transaction([
       this.prisma.lineItem.deleteMany({ where: { documentId: id } }),
@@ -165,7 +199,15 @@ export class DocumentsService {
           addressLine: dto.addressLine,
           extraAddress: dto.extraAddress,
           selectedAddress: dto.selectedAddress ? JSON.stringify(dto.selectedAddress) : null,
-          price: dto.price ?? totals.total,
+          hasOccupier: Boolean(dto.hasOccupier),
+          occupierFirstName: dto.occupierFirstName?.trim() || null,
+          occupierLastName: dto.occupierLastName?.trim() || null,
+          occupierPhone: dto.occupierPhone?.trim() || null,
+          occupierPostalCode: dto.occupierPostalCode?.trim() || null,
+          occupierAddressLine: dto.occupierAddressLine?.trim() || null,
+          occupierExtraAddress: dto.occupierExtraAddress?.trim() || null,
+          occupierSelectedAddress: dto.occupierSelectedAddress ? JSON.stringify(dto.occupierSelectedAddress) : null,
+          price: totalAmount,
           includeOptions: dto.includeOptions?.length ? JSON.stringify(dto.includeOptions) : null,
           sendMail: dto.sendMail ?? false,
           sendImages: dto.sendImages ?? false,
@@ -179,7 +221,9 @@ export class DocumentsService {
           dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
           bookingDate: dto.bookingDate ? new Date(dto.bookingDate) : null,
           subtotal: totals.subtotal,
-          total: dto.price ?? totals.total,
+          total: totalAmount,
+          paidAmount: currentPaid,
+          paymentStatus: updatedPaymentStatus,
           lineItems: { create: this.toLineItemCreates(lineItems) },
           attachments: { create: this.toAttachmentCreates(dto.attachments) }
         }
@@ -392,6 +436,14 @@ export class DocumentsService {
         addressLine: source.addressLine,
         extraAddress: source.extraAddress,
         selectedAddress: source.selectedAddress,
+        hasOccupier: source.hasOccupier,
+        occupierFirstName: source.occupierFirstName,
+        occupierLastName: source.occupierLastName,
+        occupierPhone: source.occupierPhone,
+        occupierPostalCode: source.occupierPostalCode,
+        occupierAddressLine: source.occupierAddressLine,
+        occupierExtraAddress: source.occupierExtraAddress,
+        occupierSelectedAddress: source.occupierSelectedAddress,
         price: source.price,
         includeOptions: source.includeOptions,
         sendMail: source.sendMail,
@@ -450,12 +502,28 @@ export class DocumentsService {
   async markPaidFromPayment(id: string) {
     const document = await this.ensureExists(id);
     if (document.type !== "INVOICE") throw new BadRequestException("Only invoices can be marked paid from payment");
+    const total = Number(document.total ?? document.price ?? 0);
+    const currentPaid = Number(document.paidAmount ?? 0);
+    const remaining = Math.max(0, total - currentPaid);
+    if (remaining > 0) {
+      await this.prisma.paymentRecord.create({
+        data: {
+          documentId: id,
+          amount: remaining,
+          note: "Online Stripe payment",
+          method: "STRIPE",
+          paidAt: new Date()
+        }
+      });
+    }
     await this.prisma.document.update({
       where: { id },
       data: {
+        paidAmount: total,
         paymentStatus: "PAID",
         status: "PAID",
-        paidAt: new Date()
+        paidAt: new Date(),
+        paymentUrl: null
       }
     });
     return this.detail(id);
@@ -463,15 +531,70 @@ export class DocumentsService {
 
   async markPaid(id: string) {
     const document = await this.ensureExists(id);
-    if (document.type !== "INVOICE") throw new BadRequestException("Only invoices can be marked paid");
-    return this.prisma.document.update({
+    if (document.type !== "INVOICE" && document.type !== "QUOTATION") {
+      throw new BadRequestException("Only invoices and quotations can be marked paid");
+    }
+    const total = Number(document.total ?? document.price ?? 0);
+    const currentPaid = Number(document.paidAmount ?? 0);
+    const remaining = Math.max(0, total - currentPaid);
+    if (remaining > 0) {
+      await this.prisma.paymentRecord.create({
+        data: {
+          documentId: id,
+          amount: remaining,
+          note: "Marked as paid in full",
+          method: "BANK_TRANSFER",
+          paidAt: new Date()
+        }
+      });
+    }
+    await this.prisma.document.update({
       where: { id },
       data: {
+        paidAmount: total,
         paymentStatus: "PAID",
         status: "PAID",
-        paidAt: new Date()
+        paidAt: new Date(),
+        paymentUrl: null
       }
     });
+    return this.detail(id);
+  }
+
+  async recordPayment(id: string, dto: RecordPaymentDto) {
+    const document = await this.ensureExists(id);
+    const amount = Number(dto.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException("Payment amount must be greater than zero");
+    }
+    await this.prisma.paymentRecord.create({
+      data: {
+        documentId: id,
+        amount,
+        note: dto.note?.trim() || "Partial payment",
+        method: dto.method?.trim() || "BANK_TRANSFER",
+        paidAt: dto.paidAt ? new Date(dto.paidAt) : new Date()
+      }
+    });
+
+    const allPayments = await this.prisma.paymentRecord.findMany({ where: { documentId: id } });
+    const totalPaid = allPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const total = Number(document.total ?? document.price ?? 0);
+    const isFullyPaid = totalPaid >= total && total > 0;
+    const isPartiallyPaid = totalPaid > 0 && totalPaid < total;
+
+    await this.prisma.document.update({
+      where: { id },
+      data: {
+        paidAmount: totalPaid,
+        paymentStatus: isFullyPaid ? "PAID" : isPartiallyPaid ? "PARTIALLY_PAID" : "NOT_PAID",
+        status: isFullyPaid ? "PAID" : (document.status === "PAID" ? "PARTIALLY_PAID" : document.status),
+        paidAt: isFullyPaid ? (document.paidAt || new Date()) : null,
+        paymentUrl: null
+      }
+    });
+
+    return this.detail(id);
   }
 
   async markSent(id: string) {
@@ -487,29 +610,39 @@ export class DocumentsService {
   private async resolveClientId(dto: CreateDocumentDto) {
     if (dto.clientId) return dto.clientId;
     if (!dto.client) return undefined;
-    if (dto.client.email || dto.client.phone) {
-      const existing = await this.prisma.client.findFirst({
-        where: {
-          OR: [
-            ...(dto.client.email ? [{ email: dto.client.email }] : []),
-            ...(dto.client.phone ? [{ phone: dto.client.phone }] : [])
-          ]
-        },
-        orderBy: { createdAt: "asc" }
-      });
-      if (existing) return existing.id;
-    }
-    const client = await this.prisma.client.create({
-      data: {
-        firstName: dto.client.firstName,
-        lastName: dto.client.lastName,
-        email: dto.client.email,
-        phone: dto.client.phone,
-        company: dto.client.company,
-        notes: dto.client.notes
-      }
+    const firstName = dto.client.firstName?.trim();
+    const lastName = dto.client.lastName?.trim() || undefined;
+    const email = dto.client.email?.trim() || undefined;
+    const phone = dto.client.phone?.trim() || undefined;
+
+    if (!firstName && !email && !phone) return undefined;
+
+    const existing = await this.prisma.client.findFirst({
+      where: {
+        OR: [
+          ...(email ? [{ email }] : []),
+          ...(phone ? [{ phone }] : []),
+          ...(firstName && lastName ? [{ firstName, lastName }] : [])
+        ]
+      },
+      orderBy: { createdAt: "asc" }
     });
-    return client.id;
+    if (existing) return existing.id;
+
+    if (firstName) {
+      const client = await this.prisma.client.create({
+        data: {
+          firstName,
+          lastName: lastName ?? null,
+          email: email ?? null,
+          phone: phone ?? null,
+          company: dto.client.company?.trim() ?? null,
+          notes: dto.client.notes?.trim() ?? null
+        }
+      });
+      return client.id;
+    }
+    return undefined;
   }
 
   private async findDuplicateBooking(dto: CreateDocumentDto, clientId?: string) {
@@ -597,15 +730,19 @@ export class DocumentsService {
   }
 
   private async createStripeCheckoutUrl(
-    document: { id: string; documentNo: string; type: string; price: unknown; total: unknown; addressLine?: string | null },
+    document: { id: string; documentNo: string; type: string; price: unknown; total: unknown; paidAmount?: unknown; addressLine?: string | null },
     secret: string
   ) {
-    const amount = Math.round(Number(document.price ?? document.total ?? 0) * 100);
+    const total = Number(document.price ?? document.total ?? 0);
+    const paid = Number(document.paidAmount ?? 0);
+    const remaining = Math.max(0, total - paid);
+    const amountToCharge = remaining > 0 ? remaining : total;
+    const amount = Math.round(amountToCharge * 100);
     if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException("Payment amount is invalid");
 
     const stripe = new Stripe(secret);
     const product = await stripe.products.create({
-      name: "Booking  "
+      name: `${titleForDocument(document.type)} ${document.documentNo}${remaining > 0 && paid > 0 ? " - Remaining Balance" : ""}`
     });
     const price = await stripe.prices.create({
       unit_amount: amount,

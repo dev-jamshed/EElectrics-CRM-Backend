@@ -1,98 +1,130 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# E Electrics CRM - Backend API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+> NestJS v10 REST API and Email Engine for E Electrics CRM, backed by SQLite and Prisma ORM.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+---
 
-## Description
+## 1. Architecture & Core Responsibilities
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+The backend handles all business logic, document sequencing, PDF generation, email synchronization (IMAP/SMTP), and public client interfaces:
 
-## Project setup
+- **Auth & Team:** Simple token-based admin authorization with `scrypt` hashing for team accounts and global guard.
+- **Documents Module:** Invoices, Bookings, Quotations, revisions history, line items calculation, and email dispatch.
+- **Counters Service:** Atomic sequence numbering for `BKG-XXXX`, `INV-XXXX`, `QTN-XXXX`, and case files.
+- **Mailbox Module:** Full two-way email integration via `imapflow` (sync from mail server) and `nodemailer` (SMTP outbound), plus Server-Sent Events (SSE) for real-time frontend updates.
+- **PDF Module:** HTML-based invoice and quotation rendering with E Electrics letterhead, NAPIT logo, and line item tables.
+- **Public Portals:** Unauthenticated token endpoints for customer booking confirmations and Stripe payment redirects.
+- **Address Autocomplete:** Integrated with Woosmap for UK postcode & street address lookup.
 
-```bash
-$ npm install
+---
+
+## 2. Directory Layout
+
+```
+EElectrics-CRM-Backend/
+├── prisma/
+│   ├── schema.prisma           # Prisma schema (SQLite dev.db)
+│   ├── seed.ts                 # Database seeder (sample client, case file, booking)
+│   └── dev.db                  # Local SQLite database file
+├── data/
+│   └── auth-users.json         # Managed sub-admin team accounts
+├── src/
+│   ├── main.ts                 # Bootstrap, CORS config, global ValidationPipe
+│   ├── app.module.ts           # Root NestJS module & global AuthGuard
+│   ├── common/
+│   │   ├── prisma.service.ts   # Prisma Client database hook
+│   │   └── counters.service.ts # Sequential number generator
+│   └── modules/
+│       ├── auth/               # Auth controller, service, guard, and user management
+│       ├── clients/            # Client CRUD & case file relations
+│       ├── documents/          # Document CRUD, cloning, mail sender, public booking/payment
+│       ├── mailbox/            # IMAP sync, email threads, message replies, SSE stream
+│       ├── dashboard/          # Dashboard summary & aggregates
+│       ├── addresses/          # Woosmap address search proxy
+│       └── pdf/                # PDF preview and download renderer
 ```
 
-## Compile and run the project
+---
 
-```bash
-# development
-$ npm run start
+## 3. Environment Configuration
 
-# watch mode
-$ npm run start:dev
+Create or update `.env` in `EElectrics-CRM-Backend/`:
 
-# production mode
-$ npm run start:prod
+```env
+# Database
+DATABASE_URL="file:./dev.db"
+PORT=4000
+WEB_ORIGIN="http://localhost:5173"
+PUBLIC_APP_URL="http://localhost:5173"
+
+# Admin Authentication
+ADMIN_EMAIL="admin@eelectrics.co.uk"
+ADMIN_PASSWORD="admin123"
+AUTH_TOKEN="modern-crm-local-token"
+
+# Mail Server (IMAP & SMTP)
+MAIL_MAILER="smtp"
+MAIL_HOST="mail.eelectrics.co.uk"
+MAIL_PORT="465"
+MAIL_USERNAME="admin@eelectrics.co.uk"
+MAIL_PASSWORD="your-secure-mail-password"
+MAIL_ENCRYPTION="ssl"
+MAIL_FROM_ADDRESS="admin@eelectrics.co.uk"
+MAIL_FROM_NAME="E Electrics Ltd"
+
+# Payments & Addresses
+STRIPE_KEY="pk_test_..."
+STRIPE_SECRET="sk_test_..."
+WOOSMAP_API_KEY="your-woosmap-key"
 ```
 
-## Run tests
+---
+
+## 4. Database Setup & Seeding
 
 ```bash
-# unit tests
-$ npm run test
+# Install packages
+npm install
 
-# e2e tests
-$ npm run test:e2e
+# Push schema directly to SQLite
+npm run db:push
 
-# test coverage
-$ npm run test:cov
+# Generate Prisma Client
+npm run db:generate
+
+# Seed default client, case file, and booking
+npm run seed
+
+# (Optional) Open Prisma Studio UI in browser
+npm run db:studio
 ```
 
-## Deployment
+---
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## 5. Running the Backend
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Start development server with hot-reload
+npm run dev
+
+# Production build & start
+npm run build
+npm run start
 ```
+*The API is hosted at `http://localhost:4000/api`.*
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+---
 
-## Resources
+## 6. Authentication Details
 
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- **Protected by Default:** All routes require the HTTP header:
+  ```http
+  Authorization: Bearer modern-crm-local-token
+  ```
+- **SSE & Downloads:** For browser Server-Sent Events or file downloads that cannot pass headers, the token may be passed as a query param:
+  `?token=modern-crm-local-token`
+- **Public Routes:** Marked with `@Public()`, including:
+  - `POST /api/auth/login`
+  - `GET /api/public/bookings/:id`
+  - `POST /api/public/bookings/:id/confirm`
+  - `GET /api/public/payments/:id`

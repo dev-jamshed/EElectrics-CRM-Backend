@@ -37,6 +37,8 @@ function renderOldInvoiceQuotationTemplate(document: any, mode: PdfRenderMode) {
   const notes = richText(document.emailNote || "");
   const pdfNotes = richText(document.pdfNotes || "");
   const total = amount(document.price ?? document.total);
+  const paidAmount = Number(document.paidAmount || 0);
+  const remainingAmount = Math.max(0, total - paidAmount);
   const includeFooter = renderIncludeFooter(document, total);
   const paymentSection = renderPaymentMethodSection(document, type);
   const lineItemRows = renderPdfLineItems(document.lineItems);
@@ -338,6 +340,15 @@ function renderOldInvoiceQuotationTemplate(document: any, mode: PdfRenderMode) {
                 ${detailRow("FAO :", clientName || "-")}
                 ${detailRow("Address :", document.addressLine || document.selectedAddress || "-")}
                 ${document.extraAddress ? detailRow("Address 2 :", document.extraAddress) : ""}
+                ${
+                  document.hasOccupier && (document.occupierFirstName || document.occupierAddressLine)
+                    ? `
+                ${detailRow("Site / Occupier :", [document.occupierFirstName, document.occupierLastName].filter(Boolean).join(" ") || "-")}
+                ${detailRow("Site Address :", document.occupierAddressLine || document.occupierPostalCode || "-")}
+                ${document.occupierExtraAddress ? detailRow("Site Address 2 :", document.occupierExtraAddress) : ""}
+                    `
+                    : ""
+                }
               </div>
             </div>
           </div>
@@ -360,9 +371,18 @@ function renderOldInvoiceQuotationTemplate(document: any, mode: PdfRenderMode) {
             <div class="description-footer">
               ${includeFooter}
               <div class="final-price-footer">
-                <p>Total to be Paid</p>
+                <p>Total Amount</p>
                 <p>${formatPounds(total)}</p>
               </div>
+              ${paidAmount > 0 ? `
+              <div class="discount-price-footer" style="color: #16a34a; font-weight: bold;">
+                <p>Paid to Date</p>
+                <p>- ${formatPounds(paidAmount)}</p>
+              </div>
+              <div class="final-price-footer" style="background-color: #DD2D3E; color: #fff; margin-top: 5px;">
+                <p>Remaining Balance Due</p>
+                <p>${formatPounds(remainingAmount)}</p>
+              </div>` : ""}
             </div>
           </div>
           ${notes ? `<div class="note-container"><p class="note">Notes:</p><p>${notes}</p></div>` : ""}
@@ -515,6 +535,13 @@ function renderOldBookingTemplate(document: any, mode: PdfRenderMode) {
                     ${
                       document.extraAddress
                         ? `<tr><td class="information_td title_user">Address 2 :</td><td class="information_td text-align-right-td">${escapeHtml(document.extraAddress)}</td></tr>`
+                        : ""
+                    }
+                    ${
+                      document.hasOccupier && (document.occupierFirstName || document.occupierAddressLine)
+                        ? `<tr><td class="information_td title_user">Site / Occupier :</td><td class="information_td text-align-right-td">${escapeHtml([document.occupierFirstName, document.occupierLastName].filter(Boolean).join(" ") || "-")}</td></tr>
+                           <tr><td class="information_td title_user">Site Address :</td><td class="information_td text-align-right-td">${escapeHtml(document.occupierAddressLine || document.occupierPostalCode || "-")}</td></tr>
+                           ${document.occupierExtraAddress ? `<tr><td class="information_td title_user">Site Address 2 :</td><td class="information_td text-align-right-td">${escapeHtml(document.occupierExtraAddress)}</td></tr>` : ""}`
                         : ""
                     }
                   </table>

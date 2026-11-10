@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query } from "@nestjs/common";
-import { CloneDocumentDto, CreateDocumentDto, DocumentTypeValue, UpdateDocumentDto } from "./dto";
+import { CloneDocumentDto, CreateDocumentDto, DocumentTypeValue, RecordPaymentDto, UpdateDocumentDto } from "./dto";
 import { DocumentsService } from "./documents.service";
 
 @Controller("documents")
@@ -44,6 +44,11 @@ export class DocumentsController {
   @Post(":id/mark-paid")
   markPaid(@Param("id") id: string) {
     return this.documents.markPaid(id);
+  }
+
+  @Post(":id/payments")
+  recordPayment(@Param("id") id: string, @Body() dto: RecordPaymentDto) {
+    return this.documents.recordPayment(id, dto);
   }
 
   @Post(":id/send")

@@ -139,6 +139,13 @@ function renderBookingEmail(document: any) {
                     ${emailRow("FAO :", clientName || "-")}
                     ${emailRow("Address :", document.addressLine || document.selectedAddress || "-")}
                     ${document.extraAddress ? emailRow("Address 2 :", document.extraAddress) : ""}
+                    ${
+                      document.hasOccupier && (document.occupierFirstName || document.occupierAddressLine)
+                        ? `${emailRow("Site / Occupier :", [document.occupierFirstName, document.occupierLastName].filter(Boolean).join(" ") || "-")}
+                           ${emailRow("Site Address :", document.occupierAddressLine || document.occupierPostalCode || "-")}
+                           ${document.occupierExtraAddress ? emailRow("Site Address 2 :", document.occupierExtraAddress) : ""}`
+                        : ""
+                    }
                   </table>
                 </td>
               </tr>
@@ -164,6 +171,8 @@ function renderDocumentEmail(document: any) {
   const body = richText(document.description || document.emailBody || "");
   const notes = richText(document.emailNote || "");
   const total = amount(document.price ?? document.total);
+  const paidAmount = Number(document.paidAmount || 0);
+  const remainingAmount = Math.max(0, total - paidAmount);
   const includeRow = renderIncludeRow(document, total);
   const paymentSection = renderPaymentMethodSection(document, String(document.type ?? ""));
   const lineItemRows = renderEmailLineItems(document.lineItems);
@@ -238,6 +247,13 @@ function renderDocumentEmail(document: any) {
                     ${emailRow("FAO:", clientName || "-")}
                     ${emailRow("Address:", document.addressLine || document.selectedAddress || "-")}
                     ${document.extraAddress ? emailRow("Address 2:", document.extraAddress) : ""}
+                    ${
+                      document.hasOccupier && (document.occupierFirstName || document.occupierAddressLine)
+                        ? `${emailRow("Site / Occupier:", [document.occupierFirstName, document.occupierLastName].filter(Boolean).join(" ") || "-")}
+                           ${emailRow("Site Address:", document.occupierAddressLine || document.occupierPostalCode || "-")}
+                           ${document.occupierExtraAddress ? emailRow("Site Address 2:", document.occupierExtraAddress) : ""}`
+                        : ""
+                    }
                   </table>
                 </td>
               </tr>
@@ -268,7 +284,11 @@ function renderDocumentEmail(document: any) {
           </tr>`
         }
         ${includeRow}
-        <tr class="heading"><td>Total to be Paid</td><td>${formatPounds(total)}</td></tr>
+        <tr class="heading"><td>Total Amount</td><td style="text-align:right;">${formatPounds(total)}</td></tr>
+        ${paidAmount > 0 ? `
+        <tr class="item"><td style="color:#16a34a;font-weight:bold;background:#f0fdf4;">Total Paid to Date</td><td style="color:#16a34a;font-weight:bold;background:#f0fdf4;text-align:right;">- ${formatPounds(paidAmount)}</td></tr>
+        <tr class="heading" style="background:#DD2D3E;color:#fff;"><td>Remaining Balance Due</td><td style="text-align:right;">${formatPounds(remainingAmount)}</td></tr>
+        ` : ""}
         ${notes ? `<tr><td colspan="2" style="width:100%!important;overflow-wrap:break-word!important;padding-top:15px;font-size:12.5px;"><p style="margin-bottom:0px;padding-top:10px;margin-top:0px;padding-bottom:5px;font-weight:bold;" class="sub-heading">Notes:</p><table><tr><td class="display-block-sm" style="height:1px;border-bottom:1.5px solid #DD2D3E;display:block!important;"></td></tr></table>${notes}</td></tr>` : ""}
         ${paymentSection}
       </table>
