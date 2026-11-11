@@ -1,3 +1,7 @@
+if (!process.env.DATABASE_URL || !process.env.DATABASE_URL.startsWith("file:")) {
+  process.env.DATABASE_URL = "file:./dev.db";
+}
+
 import { ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
