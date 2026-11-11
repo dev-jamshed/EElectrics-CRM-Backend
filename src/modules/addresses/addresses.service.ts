@@ -94,8 +94,6 @@ export class AddressesService {
   private woosmapFetch(url: URL) {
     const referer =
       this.config.get<string>("WOOSMAP_REFERER")?.trim() ||
-      this.config.get<string>("APP_URL")?.trim() ||
-      this.config.get<string>("PUBLIC_APP_URL")?.trim() ||
       "https://crm.eelectrics.co.uk/";
 
     return fetch(url, {
