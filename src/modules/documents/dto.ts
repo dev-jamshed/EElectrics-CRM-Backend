@@ -155,6 +155,10 @@ export class CreateDocumentDto {
   paidAmount?: number;
 
   @IsOptional()
+  @IsNumber()
+  partialPaymentAmount?: number;
+
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
   includeOptions?: string[];

@@ -173,8 +173,14 @@ function renderDocumentEmail(document: any) {
   const total = amount(document.price ?? document.total);
   const paidAmount = Number(document.paidAmount || 0);
   const remainingAmount = Math.max(0, total - paidAmount);
+  const partialPaymentAmount = document.partialPaymentAmount !== null && document.partialPaymentAmount !== undefined
+    ? Number(document.partialPaymentAmount)
+    : 0;
+  const isPartialCharge = partialPaymentAmount > 0 && partialPaymentAmount < remainingAmount;
+  const chargeAmount = isPartialCharge ? partialPaymentAmount : remainingAmount;
+  const remainingAfterCharge = Math.max(0, remainingAmount - chargeAmount);
   const includeRow = renderIncludeRow(document, total);
-  const paymentSection = renderPaymentMethodSection(document, String(document.type ?? ""));
+  const paymentSection = renderPaymentMethodSection(document, String(document.type ?? ""), isPartialCharge, chargeAmount);
   const lineItemRows = renderEmailLineItems(document.lineItems);
   const downloadUrl = documentDownloadUrl(document);
   const downloadLabel = isInvoice ? "View & Download invoice PDF" : "View & Download quotation PDF";
@@ -287,8 +293,13 @@ function renderDocumentEmail(document: any) {
         <tr class="heading"><td>Total Amount</td><td style="text-align:right;">${formatPounds(total)}</td></tr>
         ${paidAmount > 0 ? `
         <tr class="item"><td style="color:#16a34a;font-weight:bold;background:#f0fdf4;">Total Paid to Date</td><td style="color:#16a34a;font-weight:bold;background:#f0fdf4;text-align:right;">- ${formatPounds(paidAmount)}</td></tr>
-        <tr class="heading" style="background:#DD2D3E;color:#fff;"><td>Remaining Balance Due</td><td style="text-align:right;">${formatPounds(remainingAmount)}</td></tr>
         ` : ""}
+        ${isPartialCharge ? `
+        <tr class="item" style="background:#fff7ed;color:#c2410c;font-weight:bold;"><td>Payment Requested Now (Partial Link)</td><td style="text-align:right;color:#c2410c;font-weight:bold;">${formatPounds(chargeAmount)}</td></tr>
+        <tr class="heading" style="background:#DD2D3E;color:#fff;"><td>Remaining Balance Due Later</td><td style="text-align:right;">${formatPounds(remainingAfterCharge)}</td></tr>
+        ` : (paidAmount > 0 ? `
+        <tr class="heading" style="background:#DD2D3E;color:#fff;"><td>Remaining Balance Due</td><td style="text-align:right;">${formatPounds(remainingAmount)}</td></tr>
+        ` : "")}
         ${notes ? `<tr><td colspan="2" style="width:100%!important;overflow-wrap:break-word!important;padding-top:15px;font-size:12.5px;"><p style="margin-bottom:0px;padding-top:10px;margin-top:0px;padding-bottom:5px;font-weight:bold;" class="sub-heading">Notes:</p><table><tr><td class="display-block-sm" style="height:1px;border-bottom:1.5px solid #DD2D3E;display:block!important;"></td></tr></table>${notes}</td></tr>` : ""}
         ${paymentSection}
       </table>
@@ -332,9 +343,10 @@ function renderEmailLineItems(items: any[] = []) {
     .join("");
 }
 
-function renderPaymentMethodSection(document: any, type: string) {
+function renderPaymentMethodSection(document: any, type: string, isPartialCharge = false, chargeAmount = 0) {
   if (type === "INVOICE") {
     const paymentUrl = escapeAttribute(publicPaymentUrl(document));
+    const payLabel = isPartialCharge ? `Online card payment (Pay partial ${formatPounds(chargeAmount)})` : "Online card payment";
     return `<tr>
       <td colspan="2">
         <table>
@@ -363,7 +375,7 @@ function renderPaymentMethodSection(document: any, type: string) {
                 <tr><td colspan="2" style="height:15px;"></td></tr>
                 <tr>
                   <td colspan="2" style="text-align:center;padding:5px;">
-                    <p style="font-size:9px;color:#999;margin:5px 0px;">Alternative payment option: <a href="${paymentUrl}" style="color:#999;font-size:9px;">Online card payment</a></p>
+                    <p style="font-size:11px;color:#666;margin:5px 0px;">Alternative payment option: <a href="${paymentUrl}" style="color:#DD2D3E;font-weight:bold;font-size:12px;text-decoration:underline;">${payLabel}</a></p>
                   </td>
                 </tr>
               </table>

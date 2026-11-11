@@ -39,6 +39,12 @@ function renderOldInvoiceQuotationTemplate(document: any, mode: PdfRenderMode) {
   const total = amount(document.price ?? document.total);
   const paidAmount = Number(document.paidAmount || 0);
   const remainingAmount = Math.max(0, total - paidAmount);
+  const partialPaymentAmount = document.partialPaymentAmount !== null && document.partialPaymentAmount !== undefined
+    ? Number(document.partialPaymentAmount)
+    : 0;
+  const isPartialCharge = partialPaymentAmount > 0 && partialPaymentAmount < remainingAmount;
+  const chargeAmount = isPartialCharge ? partialPaymentAmount : remainingAmount;
+  const remainingAfterCharge = Math.max(0, remainingAmount - chargeAmount);
   const includeFooter = renderIncludeFooter(document, total);
   const paymentSection = renderPaymentMethodSection(document, type);
   const lineItemRows = renderPdfLineItems(document.lineItems);
@@ -378,11 +384,20 @@ function renderOldInvoiceQuotationTemplate(document: any, mode: PdfRenderMode) {
               <div class="discount-price-footer" style="color: #16a34a; font-weight: bold;">
                 <p>Paid to Date</p>
                 <p>- ${formatPounds(paidAmount)}</p>
+              </div>` : ""}
+              ${isPartialCharge ? `
+              <div class="discount-price-footer" style="color: #c2410c; font-weight: bold; background: #fff7ed; padding: 4px 8px; border-radius: 4px;">
+                <p>Payment Due Now (Partial)</p>
+                <p>${formatPounds(chargeAmount)}</p>
               </div>
+              <div class="final-price-footer" style="background-color: #DD2D3E; color: #fff; margin-top: 5px;">
+                <p>Remaining Balance Due Later</p>
+                <p>${formatPounds(remainingAfterCharge)}</p>
+              </div>` : (paidAmount > 0 ? `
               <div class="final-price-footer" style="background-color: #DD2D3E; color: #fff; margin-top: 5px;">
                 <p>Remaining Balance Due</p>
                 <p>${formatPounds(remainingAmount)}</p>
-              </div>` : ""}
+              </div>` : "")}
             </div>
           </div>
           ${notes ? `<div class="note-container"><p class="note">Notes:</p><p>${notes}</p></div>` : ""}

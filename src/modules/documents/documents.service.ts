@@ -136,6 +136,7 @@ export class DocumentsService {
         subtotal: totals.subtotal,
         total: totalAmount,
         paidAmount: initialPaid,
+        partialPaymentAmount: dto.partialPaymentAmount !== undefined && dto.partialPaymentAmount !== null && Number(dto.partialPaymentAmount) > 0 ? Number(dto.partialPaymentAmount) : null,
         paymentStatus: computedPaymentStatus,
         paidAt: isFullyPaid ? new Date() : undefined,
         lineItems: {
@@ -175,8 +176,13 @@ export class DocumentsService {
     const lineItems = dto.type === "BOOKING" ? [] : dto.lineItems ?? [];
     const totals = this.calculateTotals(lineItems);
     const totalAmount = dto.price ?? totals.total;
-    const existingDoc = await this.prisma.document.findUnique({ where: { id }, select: { paidAmount: true, paymentStatus: true } });
+    const existingDoc = await this.prisma.document.findUnique({ where: { id }, select: { paidAmount: true, paymentStatus: true, partialPaymentAmount: true, paymentUrl: true } });
     const currentPaid = dto.paidAmount !== undefined ? Math.max(0, Number(dto.paidAmount)) : Number(existingDoc?.paidAmount ?? 0);
+    const hasPartialChanged = dto.partialPaymentAmount !== undefined;
+    const partialPaymentAmount = hasPartialChanged
+      ? (dto.partialPaymentAmount !== null && Number(dto.partialPaymentAmount) > 0 ? Number(dto.partialPaymentAmount) : null)
+      : existingDoc?.partialPaymentAmount;
+    const paymentUrl = hasPartialChanged ? null : existingDoc?.paymentUrl;
     const isFullyPaid = currentPaid >= totalAmount && totalAmount > 0;
     const isPartiallyPaid = currentPaid > 0 && currentPaid < totalAmount;
     const updatedPaymentStatus = isFullyPaid ? "PAID" : isPartiallyPaid ? "PARTIALLY_PAID" : (existingDoc?.paymentStatus === "PAID" ? "PAID" : "NOT_PAID");
@@ -223,6 +229,8 @@ export class DocumentsService {
           subtotal: totals.subtotal,
           total: totalAmount,
           paidAmount: currentPaid,
+          partialPaymentAmount,
+          paymentUrl,
           paymentStatus: updatedPaymentStatus,
           lineItems: { create: this.toLineItemCreates(lineItems) },
           attachments: { create: this.toAttachmentCreates(dto.attachments) }
@@ -499,34 +507,75 @@ export class DocumentsService {
     return paymentUrl;
   }
 
-  async markPaidFromPayment(id: string) {
+  async markPaidFromPayment(id: string, sessionId?: string) {
     const document = await this.ensureExists(id);
     if (document.type !== "INVOICE") throw new BadRequestException("Only invoices can be marked paid from payment");
     const total = Number(document.total ?? document.price ?? 0);
     const currentPaid = Number(document.paidAmount ?? 0);
     const remaining = Math.max(0, total - currentPaid);
-    if (remaining > 0) {
+
+    let amountCharged = 0;
+    if (sessionId) {
+      try {
+        const secret = stripeSecret();
+        const stripe = new Stripe(secret);
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        if (session && session.amount_total) {
+          amountCharged = session.amount_total / 100;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+
+    if (!amountCharged || amountCharged <= 0) {
+      const partialRequested =
+        document.partialPaymentAmount !== null && document.partialPaymentAmount !== undefined
+          ? Number(document.partialPaymentAmount)
+          : 0;
+      if (partialRequested > 0 && partialRequested < remaining) {
+        amountCharged = partialRequested;
+      } else {
+        amountCharged = remaining > 0 ? remaining : total;
+      }
+    }
+
+    if (amountCharged > 0) {
       await this.prisma.paymentRecord.create({
         data: {
           documentId: id,
-          amount: remaining,
-          note: "Online Stripe payment",
+          amount: amountCharged,
+          note: amountCharged < remaining ? "Online Stripe partial payment" : "Online Stripe payment (Settlement)",
           method: "STRIPE",
           paidAt: new Date()
         }
       });
     }
+
+    const allPayments = await this.prisma.paymentRecord.findMany({ where: { documentId: id } });
+    const totalPaid = allPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const isFullyPaid = totalPaid >= total && total > 0;
+    const isPartiallyPaid = totalPaid > 0 && totalPaid < total;
+    const remainingAfter = Math.max(0, total - totalPaid);
+
     await this.prisma.document.update({
       where: { id },
       data: {
-        paidAmount: total,
-        paymentStatus: "PAID",
-        status: "PAID",
-        paidAt: new Date(),
-        paymentUrl: null
+        paidAmount: totalPaid,
+        partialPaymentAmount: null, // Reset requested partial amount once paid so next link is for remaining balance!
+        paymentStatus: isFullyPaid ? "PAID" : isPartiallyPaid ? "PARTIALLY_PAID" : "NOT_PAID",
+        status: isFullyPaid ? "PAID" : (document.status === "PAID" ? "PARTIALLY_PAID" : document.status),
+        paidAt: isFullyPaid ? (document.paidAt || new Date()) : null,
+        paymentUrl: null // Clear cached payment url so next link uses updated remaining balance!
       }
     });
-    return this.detail(id);
+
+    return {
+      isFullyPaid,
+      paidThisTime: amountCharged,
+      totalPaid,
+      remainingAmount: remainingAfter
+    };
   }
 
   async markPaid(id: string) {
@@ -730,19 +779,41 @@ export class DocumentsService {
   }
 
   private async createStripeCheckoutUrl(
-    document: { id: string; documentNo: string; type: string; price: unknown; total: unknown; paidAmount?: unknown; addressLine?: string | null },
+    document: {
+      id: string;
+      documentNo: string;
+      type: string;
+      price: unknown;
+      total: unknown;
+      paidAmount?: unknown;
+      partialPaymentAmount?: unknown;
+      addressLine?: string | null;
+    },
     secret: string
   ) {
     const total = Number(document.price ?? document.total ?? 0);
     const paid = Number(document.paidAmount ?? 0);
     const remaining = Math.max(0, total - paid);
-    const amountToCharge = remaining > 0 ? remaining : total;
+
+    const partialRequested =
+      document.partialPaymentAmount !== null && document.partialPaymentAmount !== undefined
+        ? Number(document.partialPaymentAmount)
+        : 0;
+
+    const isPartialCharge = partialRequested > 0 && partialRequested < remaining;
+    const amountToCharge = isPartialCharge ? partialRequested : (remaining > 0 ? remaining : total);
     const amount = Math.round(amountToCharge * 100);
     if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException("Payment amount is invalid");
 
     const stripe = new Stripe(secret);
+    const productName = isPartialCharge
+      ? `${titleForDocument(document.type)} ${document.documentNo} - Partial Payment (£${amountToCharge.toFixed(2)})`
+      : (remaining > 0 && paid > 0
+        ? `${titleForDocument(document.type)} ${document.documentNo} - Remaining Balance (£${amountToCharge.toFixed(2)})`
+        : `${titleForDocument(document.type)} ${document.documentNo}`);
+
     const product = await stripe.products.create({
-      name: `${titleForDocument(document.type)} ${document.documentNo}${remaining > 0 && paid > 0 ? " - Remaining Balance" : ""}`
+      name: productName
     });
     const price = await stripe.prices.create({
       unit_amount: amount,
@@ -753,12 +824,13 @@ export class DocumentsService {
       payment_method_types: ["card"],
       line_items: [{ price: price.id, quantity: 1 }],
       mode: "payment",
-      success_url: `${publicApiBaseUrl()}/public/payments/${document.id}/success`,
+      success_url: `${publicApiBaseUrl()}/public/payments/${document.id}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${publicApiBaseUrl()}/public/payments/${document.id}/cancel`,
       metadata: {
         documentId: document.id,
         documentNo: document.documentNo,
-        type: document.type
+        type: document.type,
+        amountCharged: String(amountToCharge)
       }
     });
 

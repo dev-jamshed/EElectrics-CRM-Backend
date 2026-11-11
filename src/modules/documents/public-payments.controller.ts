@@ -1,4 +1,4 @@
-import { Controller, Get, Header, Param, Redirect } from "@nestjs/common";
+import { Controller, Get, Header, Param, Query, Redirect } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
 import { DocumentsService } from "./documents.service";
 
@@ -16,9 +16,13 @@ export class PublicPaymentsController {
 
   @Get(":id/success")
   @Header("Content-Type", "text/html; charset=utf-8")
-  async success(@Param("id") id: string) {
-    await this.documents.markPaidFromPayment(id);
-    return paymentResultHtml("Payment Successful", "Thanks for your payment. Your invoice has been marked as paid.");
+  async success(@Param("id") id: string, @Query("session_id") sessionId?: string) {
+    const result = await this.documents.markPaidFromPayment(id, sessionId);
+    const title = result.isFullyPaid ? "Payment Successful" : "Partial Payment Successful";
+    const message = result.isFullyPaid
+      ? `Thank you for your payment of £${result.paidThisTime.toFixed(2)}. Your invoice has been paid in full.`
+      : `Thank you for your payment of £${result.paidThisTime.toFixed(2)}. Remaining balance due: £${result.remainingAmount.toFixed(2)}.`;
+    return paymentResultHtml(title, message);
   }
 
   @Get(":id/cancel")

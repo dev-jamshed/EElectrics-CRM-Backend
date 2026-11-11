@@ -87,6 +87,7 @@ model Document {
   subtotal        Decimal        @default(0)
   total           Decimal        @default(0)
   paidAmount      Decimal        @default(0)
+  partialPaymentAmount Decimal?
   paymentStatus   String         @default("NOT_PAID")
   paymentUrl      String?
   pdfUrl          String?
