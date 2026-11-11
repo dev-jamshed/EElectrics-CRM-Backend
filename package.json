@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "dev": "nest start --watch",
-    "build": "nest build",
+    "postinstall": "prisma generate",
+    "build": "prisma generate && nest build",
     "start": "node dist/src/main.js",
     "lint": "eslint \"src/**/*.ts\"",
     "db:generate": "prisma generate",
